@@ -1,0 +1,8 @@
+# Made by publish.py — do not edit by hand: the signature (index.yaml.sig) covers every byte.
+schema: 1
+repository: sh-app-centre
+serial: 20261101154808
+generated: '2026-11-01T15:48:08Z'
+expires: '2026-12-01T15:48:08Z'
+recipes:
+  piper: {path: piper/recipe.yaml, sha256: b6201e2ff0b0a775033912d1c9cd282cf24a44997f0c00365b5d8b7208860370, size: 2367}

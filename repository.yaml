@@ -1,0 +1,9 @@
+# The repository's own file (like Home Assistant's repository.yaml / Umbrel's umbrel-app-store.yml).
+schema: 1
+id: sh-app-centre                   # every recipe id here starts with it
+name: SH App centre recipes
+maintainer: Andrea65485
+url: https://github.com/Andrea65485/SH-App-centre-recipes
+# The signed index (index.yaml + index.yaml.sig, made by the maintainer's publish script) lists each recipe's file
+# and SHA-256, a serial and `expires:` — an updater refuses an index that isn't signed by the key it pinned, an older
+# serial than one it has seen, or an expired one.

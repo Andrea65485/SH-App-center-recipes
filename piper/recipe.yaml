@@ -1,0 +1,55 @@
+# Piper — a voice for Home Assistant (text to speech), on your own machine: Wyoming protocol, port 10200.
+schema: 1
+id: sh-app-centre.piper
+name: Piper
+summary: A voice for Home Assistant — turns its answers into speech, on your own machine, no cloud.
+category: Home automation
+version: "2.5.2"
+links: {home: "https://github.com/rhasspy/wyoming-piper", notes: "https://github.com/rhasspy/wyoming-piper/blob/main/CHANGELOG.md"}
+needs:
+  platforms: [linux/amd64, linux/arm64]
+  memory_mb: 512
+  internet: "Only to download the voice you pick, the first time it starts (and any other voice you choose later)."
+
+slots:
+  voices:
+    type: folder
+    suggest: app-folder
+    question: "Where should Piper keep its voices"
+    help: "Each voice is a download of about 60 MB, kept here so it isn't fetched again. Nothing private is stored in it."
+  voice:
+    type: choice
+    question: "Which voice should it speak with"
+    help: "The voice Home Assistant hears by default. You can change it later; more voices and languages exist."
+    options:
+      "English (UK) — Alan": en_GB-alan-medium
+      "English (UK) — Cori": en_GB-cori-medium
+      "English (US) — Lessac": en_US-lessac-medium
+      "Italiano — Paola": it_IT-paola-medium
+      "Italiano — Riccardo (smaller, lower quality)": it_IT-riccardo-x_low
+    default: "English (US) — Lessac"
+  address:
+    type: port
+    suggest: free-port
+    default: 10200
+    question: "The address Home Assistant will use to reach it"
+    help: "Home Assistant connects here to ask for speech. 10200 is the usual one; another is fine if it's taken."
+
+tips:
+  - "In Home Assistant: Settings → Devices & services → Add integration → Wyoming Protocol, with this machine's address and {{address}}."
+  - "Piper's optional voice-management web page has no login, so this recipe leaves it switched off."
+
+compose:
+  services:
+    piper:
+      image: rhasspy/wyoming-piper:2.5.2
+      command: ["--voice", "{{voice}}"]
+      ports: ["{{address}}:10200"]
+      volumes: ["{{voices}}:/data"]
+      restart: unless-stopped
+
+update:
+  main: piper
+  tags: '^\d+\.\d+\.\d+$'
+  health: {check: container-health, service: piper, wait: 300}     # the image's own health check (up to 5 min at first start)
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image} # voices are plain files; no database to migrate
