@@ -19,7 +19,8 @@ MAX_BYTES = 64 * 1024
 TYPES = {"folder": {"app-folder"}, "port": {"free-port"}, "secret": set(), "timezone": {"host"}, "user": {"host"},
          "choice": set(), "toggle": set(), "number": set(), "text": set(), "url": {"your-domain", "lan-address"},
          "networks": {"home-network"}}
-SERVICE_KEYS = {"image", "ports", "volumes", "environment", "depends_on", "deploy", "restart", "healthcheck", "command"}
+SERVICE_KEYS = {"image", "ports", "volumes", "environment", "depends_on", "deploy", "restart", "healthcheck", "command", "user"}
+USER_FORM = re.compile(r"^\{\{\s*([a-z_][a-z0-9_]*)\.uid\s*\}\}:\{\{\s*\1\.gid\s*\}\}$")   # user: "{{owner.uid}}:{{owner.gid}}" only
 # Extra access a recipe may ask for, only by declaring it (needs.elevated) with a reason in plain words — and nothing else.
 ELEVATED = {"host-network": ("network_mode", "host"), "net-admin": ("cap_add", "NET_ADMIN"),
             "net-raw": ("cap_add", "NET_RAW"), "tun-device": ("devices", "/dev/net/tun:/dev/net/tun")}
@@ -184,7 +185,7 @@ def shape(r):
             for k in ("ports", "volumes", "cap_add", "devices", "depends_on"):
                 if k in svc and not (isinstance(svc[k], list) and len(svc[k]) <= 20 and all(_str(x, 200) or _int(x, 1, 65535) for x in svc[k])):
                     e.append(f"{where}: '{k}' must be a list of short values")
-            for k in ("restart", "network_mode"):
+            for k in ("restart", "network_mode", "user"):
                 if k in svc and not _str(svc[k], 40):
                     e.append(f"{where}: '{k}' must be a short text")
             if "environment" in svc and not (isinstance(svc["environment"], dict) and len(svc["environment"]) <= 60 and
@@ -381,6 +382,11 @@ def _check(r, repo_id):
                 err.append(f"{sname}: volume {str(v)[:60]!r}: the outside path must be a folder gap (no fixed paths, no Docker socket)")
             elif str(v).count(":") > 2 or (str(v).count(":") == 2 and str(v).rsplit(":", 1)[1] not in ("ro", "rw")):
                 err.append(f"{sname}: volume {str(v)[:60]!r}: only ':ro' or ':rw' may follow the inside path")
+        if "user" in svc:
+            m = USER_FORM.match(svc["user"])
+            if not (m and slots.get(m.group(1), {}).get("type") == "user"):
+                err.append(f"{sname}: user must be \"{{{{<a user gap>.uid}}}}:{{{{<a user gap>.gid}}}}\" — your own account, "
+                           "never a fixed number or root")
         if set(svc.get("deploy", {})) - {"resources"}:
             err.append(f"{sname}: deploy may only hold resources")
         for d in svc.get("depends_on", []):
@@ -521,8 +527,12 @@ def permissions(r):
             name = WHOLE.match(re.sub(r"/[a-z0-9_\-/]+$", "", parts[0])).group(1)
             base = slots[name].get("under", name)
             folders.setdefault(base, set()).add("read only" if parts[-1] == "ro" else "read and change")
-    for base, modes in folders.items():
-        out.append(("folder", f"its own folder ({slots[base]['question'].rstrip('?')}) — " + " / ".join(sorted(modes)), "always"))
+    for base, modes in folders.items():         # made for the app (app-folder, or inside one) vs one of yours it may use
+        own = slots[base].get("suggest") == "app-folder"
+        out.append(("folder", f"{'its own folder' if own else 'a folder you choose'} ({slots[base]['question'].rstrip('?')}) — "
+                    + " / ".join(sorted(modes)), "always"))
+    if services and all("user" in svc for svc in services.values()):
+        out.append(("account", "runs as your own account, not as the machine's administrator (root)", "always"))
     if any(svc.get("network_mode") == "host" for svc in services.values()):
         out.append(("network", "your home network directly (like a device plugged into the router)", "always"))
     else:

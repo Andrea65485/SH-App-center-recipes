@@ -88,6 +88,7 @@ More:
 | `environment` | NAMES → plain values; a secret only as a **whole** value (`DB_PASSWORD: "{{db_pass}}"`) |
 | `command` | a text or a list of texts |
 | `depends_on` | other services of the same recipe |
+| `user` | only `"{{<a user gap>.uid}}:{{<a user gap>.gid}}"`: the app runs as your own account instead of root. Never a fixed number, never `0` or `root` |
 | `restart`, `healthcheck` | plain values |
 | `deploy` | `resources` only |
 
@@ -114,8 +115,10 @@ install.
 ## What it can do (worked out, not declared)
 
 The list of what an app gets — shown on its store page, before installing, and afterwards — is **worked out from the
-recipe itself**: its volumes (its own folder, read and change or read only), its ports or host network, the internet
-(every app can reach it), declared extra access, secrets, and what each switch would add. A recipe can't describe
+recipe itself**: its volumes (*its own folder* when the gap is `suggest: app-folder` or inside one; otherwise *a folder
+you choose*, such as your music — each read and change, or read only with `:ro`), its ports or host network, the
+internet (every app can reach it), whether it runs as your own account (`user`), declared extra access, secrets, and
+what each switch would add. A recipe can't describe
 itself as harmless: its author supplies only the *reasons* beside extra access and the plain notes in `needs`.
 
 ## Updating
@@ -128,8 +131,10 @@ update:
   major: {one_at_a_time: true, dump: {kind: none}, rollback: image}
 ```
 
-- **`tags`** must match the main image's own tag, and may not use repeated groups, back-references or look-arounds
-  (they can make matching take practically forever; tag patterns never need them).
+- **`tags`** describes **every** version tag of the app (`'^\d+\.\d+\.\d+$'`), not just the current series: a pattern
+  like `'^0\.64\.\d+$'` would never offer 0.65. The updater decides which step is safe (one major at a time). It must
+  match the main image's own tag, and may not use repeated groups, back-references or look-arounds (they can make
+  matching take practically forever; tag patterns never need them).
 - **`health.check`**, how the updater knows the new version works: `http-status` (the page answers below
   `answer_below`, at `path`), `container-health` (the image's own health check), `running-digest` (the new image
   runs), `app-status` and `ok-detail` (a check the updater's machine helper knows for that app). Optional: `service`,
