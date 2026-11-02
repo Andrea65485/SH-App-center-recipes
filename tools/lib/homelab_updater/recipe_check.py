@@ -460,6 +460,18 @@ def valid(slot, value):
 def fill(r, answers, rng=secrets):
     """Fill a passed recipe in as DATA: each string rebuilt from its parts, the result written by the YAML library.
     → (compose text, {ENV: secret}, tips, steps by hand). A bad answer → Refused, naming the gap."""
+    compose, env, tips, steps = _fill(r, answers, rng, for_gate=False)
+    return yaml.safe_dump(compose, sort_keys=False, allow_unicode=True), env, tips, steps
+
+
+def fill_install(r, answers):
+    """For an install through the gate (gate 1.5): → (compose as data, {ENV: {"generate": n} | {"value": pasted}}, tips,
+    steps). No password is made here: the gate makes generated ones on the machine itself; a pasted one travels to it
+    on standard input, never in a request line."""
+    return _fill(r, answers, None, for_gate=True)
+
+
+def _fill(r, answers, rng, for_gate):
     checked(r)
     if not isinstance(answers, dict):
         raise Refused("the answers aren't a mapping")
@@ -473,7 +485,8 @@ def fill(r, answers, rng=secrets):
 
     for name, s in slots.items():           # plain gaps first; folders under a main folder and toggles after
         if s["type"] == "secret" and s.get("source", "generate") == "generate":
-            vals[name] = "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(s["length"]))
+            vals[name] = {"generate": s["length"]} if for_gate else \
+                "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(s["length"]))
             continue
         if "under" in s or s["type"] == "toggle":
             continue
@@ -494,7 +507,8 @@ def fill(r, answers, rng=secrets):
     def sub(text):
         m = WHOLE.match(text)
         if m and slots[m.group(1)]["type"] == "secret":
-            key = m.group(1).upper(); env[key] = vals[m.group(1)]
+            key, v = m.group(1).upper(), vals[m.group(1)]
+            env[key] = v if not for_gate or isinstance(v, dict) else {"value": v}
             return "${" + key + "}"
         return " ".join(SLOT.sub(lambda m: str(vals[m.group(1)][m.group(2)] if m.group(2) else vals[m.group(1)]), text).split()) \
             if SLOT.search(text) else text
@@ -510,7 +524,7 @@ def fill(r, answers, rng=secrets):
     tips = [rebuild(t) for t in r.get("tips", [])]
     steps = [rebuild(h["text"]) for h in r.get("host_steps", [])
              if any(answers.get(t, slots[t]["default"]) for t in h.get("if_on", []))]
-    return yaml.safe_dump(compose, sort_keys=False, allow_unicode=True), env, tips, steps
+    return compose, env, tips, steps
 
 
 def permissions(r):

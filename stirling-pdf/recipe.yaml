@@ -1,0 +1,57 @@
+# Stirling-PDF — PDF tools in the browser (merge, split, rotate, compress, convert, read scanned text), on your own machine.
+schema: 1
+id: sh-app-centre.stirling-pdf
+name: Stirling-PDF
+summary: PDF tools in your browser — merge, split, rotate, compress, convert, read scanned text — on your own machine.
+category: Documents
+version: "3.2.2"
+links: {home: "https://github.com/Stirling-Tools/Stirling-PDF", notes: "https://github.com/Stirling-Tools/Stirling-PDF/releases"}
+needs:
+  platforms: [linux/amd64, linux/arm64]
+  memory_mb: 1024
+  internet: "Not needed for its work: your PDFs never leave home. It may look for a newer version of itself (only shown on its page)."
+
+slots:
+  data:
+    type: folder
+    suggest: app-folder
+    question: "Where should Stirling-PDF keep its settings"
+    help: "Its settings and its own logs. Your PDFs aren't kept here: they go through it and come straight back to you."
+  settings:
+    type: folder
+    under: data
+    sub: configs
+    question: "Its settings"
+    help: "Made inside the folder above."
+  logs:
+    type: folder
+    under: data
+    sub: logs
+    question: "Its logs"
+    help: "Made inside the folder above."
+  address:
+    type: port
+    suggest: free-port
+    default: 8080
+    question: "The address you'll open it at, at home"
+    help: "You'll type it into a browser on your home network. 8080 is its usual one; another is fine if it's taken."
+
+tips:
+  - "Open it in a browser at home: this machine's address, then :{{address}}."
+  - "Reading scanned text (OCR) knows English, French, German, Portuguese and Chinese. For Italian, add ita.traineddata from github.com/tesseract-ocr/tessdata later."
+  - "There's no login: anyone on your home network can use it. Making it reachable from outside is a separate step, by hand."
+
+compose:
+  services:
+    stirling-pdf:
+      image: stirlingtools/stirling-pdf:3.2.2
+      ports: ["{{address}}:8080"]
+      volumes: ["{{settings}}:/configs", "{{logs}}:/logs"]
+      restart: unless-stopped
+      deploy: {resources: {limits: {memory: 2g}}}
+
+update:
+  main: stirling-pdf
+  tags: '^\d+\.\d+\.\d+$'
+  health: {check: http-status, service: stirling-pdf, path: "/", answer_below: 400, wait: 300}   # its page answers (Java: ~30 s at start)
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image}   # settings are plain files; no database to migrate

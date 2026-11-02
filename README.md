@@ -30,7 +30,7 @@ your key, not this one. Please don't point an updater at this repository and rel
 2. Copy **[TEMPLATE.yaml](TEMPLATE.yaml)** to `<app>/recipe.yaml`; the comments say what to change.
 3. Look at **[examples/](examples/)** for more: a database and a generated password (`paperless-ngx`), HTTPS and an
    admin page kept off (`vaultwarden`), the simplest case (`mealie`), switches, a question behind a switch, a key you
-   paste in and declared extra access (`tailscale`). `piper/` is a real, published one.
+   paste in and declared extra access (`tailscale`). `piper/` and `stirling-pdf/` are real, published ones.
 4. Check it: `python3 tools/check.py <app>/recipe.yaml --permissions` (Python 3.11+ and PyYAML). Then check the whole
    repository: `python3 tools/check.py .`
 5. In your fork, sign and publish with your own key: `python3 tools/publish.py . --key ~/.ssh/<your-id>-signing`

@@ -50,8 +50,8 @@ def fingerprint(line, ssh_keygen="ssh-keygen"):
             fh.write(k + "\n")
         r = subprocess.run([ssh_keygen, "-l", "-E", "sha256", "-f", p], capture_output=True, text=True, timeout=30)
     m = re.search(r"SHA256:[A-Za-z0-9+/]{43}", r.stdout)
-    if r.returncode != 0 or not m:
-        raise Refused("ssh-keygen couldn't read the key")
+    if r.returncode != 0 or not m:          # its own words: e.g. "No user exists for uid …" (a throwaway systemd user)
+        raise Refused("ssh-keygen couldn't read the key: " + (r.stderr.strip()[-160:] or f"exit {r.returncode}"))
     return m.group(0)
 
 
@@ -85,7 +85,9 @@ def verify_index(index_bytes, sig_bytes, repo, ssh_keygen="ssh-keygen", now=None
         except (OSError, subprocess.SubprocessError) as e:
             raise Refused(f"couldn't run ssh-keygen to check the signature ({type(e).__name__})")
     if r.returncode != 0 or not r.stdout.startswith(b'Good "' + NAMESPACE.encode() + b'" signature'):
-        raise Refused("the index's signature doesn't match the pinned key: refused (nothing from this repository is used)")
+        said = " ".join(r.stderr.decode("utf-8", "replace").split())[-160:]   # its own words, e.g. "No user exists for uid …"
+        raise Refused("the index's signature doesn't match the pinned key: refused (nothing from this repository is used)"
+                      + (f" — ssh-keygen: {said}" if said else ""))
     # signed by the right key — now the content: the same care as any input
     try:
         ix = yaml.load(index_bytes.decode("utf-8"), Loader=recipe_check._NoAliases)

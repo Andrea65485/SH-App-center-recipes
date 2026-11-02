@@ -1,8 +1,9 @@
 # Made by publish.py — do not edit by hand: the signature (index.yaml.sig) covers every byte.
 schema: 1
 repository: sh-app-centre
-serial: 20261101154808
-generated: '2026-11-01T15:48:08Z'
-expires: '2026-12-01T15:48:08Z'
+serial: 20261102103534
+generated: '2026-11-02T10:35:34Z'
+expires: '2026-12-02T10:35:34Z'
 recipes:
   piper: {path: piper/recipe.yaml, sha256: b6201e2ff0b0a775033912d1c9cd282cf24a44997f0c00365b5d8b7208860370, size: 2367}
+  stirling-pdf: {path: stirling-pdf/recipe.yaml, sha256: 6177dcce801b96b20a45dff4ac15998230856c5d2a93208eba32929263fdc326, size: 2364}
