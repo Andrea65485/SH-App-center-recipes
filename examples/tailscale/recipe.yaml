@@ -1,0 +1,84 @@
+# Tailscale — reach your home from anywhere, privately. EXAMPLE (not installable): shows the format; versions are illustrative.
+# Shows how optional settings (switches), questions behind a switch and declared extra access look in a recipe.
+schema: 1
+id: example.tailscale
+name: Tailscale
+summary: Reach your home from anywhere, privately
+category: network
+version: "1.104.4"
+links: {home: https://tailscale.com/kb, notes: https://github.com/tailscale/tailscale/releases}
+needs:
+  platforms: [amd64, arm64]
+  memory_mb: 64
+  elevated:                      # more access than most apps: shown in red on the store page, asked for at install
+    host-network: "It joins your home network directly, so your phone can reach this machine — and, if you turn it on below, the rest of your home."
+    net-admin: "It sets up its own private, encrypted connection, which needs permission to change network settings."
+    net-raw: "It checks that its connection works by sending small test messages."
+    tun-device: "The virtual network card that private connection runs through."
+
+slots:
+  state:
+    type: folder
+    suggest: app-folder
+    sub: state
+    question: "Where should Tailscale keep its settings?"
+    help: "This device's identity on your Tailscale network lives here. Keep it: without it, the machine would join as a new device."
+  auth_key:
+    type: secret
+    source: ask                  # pasted by you, not made by the updater
+    question: "Your Tailscale sign-in key"
+    help: "Make one in Tailscale's admin page: Settings → Keys → Generate auth key. Paste it here. It's kept safely and only used the first time."
+  device_name:
+    type: text
+    default: nas
+    question: "The name it will have in the Tailscale app"
+    help: "How this machine appears on your phone's list of devices."
+  exit_node:
+    type: toggle
+    default: false
+    "on": "--advertise-exit-node"
+    "off": ""
+    question: "Let your phone use your home internet when you're away?"
+    help: "Handy on public Wi-Fi: your phone's traffic goes through home first. (Tailscale calls this an 'exit node'.)"
+  share_home:
+    type: toggle
+    default: false
+    "on": "--advertise-routes={{home_networks}}"
+    "off": ""
+    question: "Let your phone reach other things at home too?"
+    help: "For things at home that can't run Tailscale themselves, like the printer or the router. Off: your phone reaches only this machine."
+  home_networks:
+    type: networks
+    suggest: home-network
+    asked_if: share_home         # only asked when the switch above is on
+    question: "Which part of your home?"
+    help: "The suggestion is your whole home network, as the router hands it out. Only home addresses are accepted, never the internet at large."
+
+tips:
+  - "Open the Tailscale app on your phone: '{{device_name}}' should be in the list within a minute."
+
+host_steps:                      # outside the compose file: the updater shows them and checks them, never does them itself
+  - if_on: [exit_node, share_home]
+    text: "Two things by hand: 1) on this machine, turn on IP forwarding (Tailscale's guide 'Enable IP forwarding on Linux'); 2) in Tailscale's admin page, open '{{device_name}}' → Edit route settings, and approve what you turned on."
+
+compose:
+  services:
+    tailscale:
+      image: docker.io/tailscale/tailscale:v1.104.4
+      network_mode: host
+      cap_add: [NET_ADMIN, NET_RAW]
+      devices: ["/dev/net/tun:/dev/net/tun"]
+      volumes: ["{{state}}:/var/lib/tailscale"]
+      environment:
+        TS_AUTHKEY: "{{auth_key}}"
+        TS_HOSTNAME: "{{device_name}}"
+        TS_STATE_DIR: /var/lib/tailscale
+        TS_USERSPACE: "false"
+        TS_EXTRA_ARGS: "{{exit_node}} {{share_home}}"
+      restart: unless-stopped
+
+update:
+  main: tailscale
+  tags: '^v(\d+\.\d+\.\d+)$'
+  health: {check: running-digest}
+  major: {one_at_a_time: true, dump: {kind: stop-and-copy, folder: state}, rollback: image}

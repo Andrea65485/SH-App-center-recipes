@@ -1,0 +1,53 @@
+# TEMPLATE — a typical one-container web app: its own folder, one address, a password made for it.
+# Copy it to <app>/recipe.yaml, replace everything marked CHANGE, delete what you don't need, then check it:
+#     python3 tools/check.py <app>/recipe.yaml --permissions
+# The rules are in STANDARD.md; the examples/ folder shows databases, switches and extra access.
+schema: 1
+id: example.my-app                      # CHANGE: <your repository id>.<the folder's name>
+name: My App                            # CHANGE: the app's name, as people know it
+summary: One line about what it does, for someone who has never heard of it.    # CHANGE
+category: tools                         # CHANGE (optional)
+version: "1.2.3"                        # CHANGE: the version you wrote and tested this for (= the image tag below)
+links: {home: "https://github.com/owner/project", notes: "https://github.com/owner/project/releases"}   # CHANGE
+needs:
+  platforms: [linux/amd64, linux/arm64]  # CHANGE: what the image is built for
+  memory_mb: 256                         # CHANGE: roughly what it uses
+  internet: "Only to check for its own updates."   # CHANGE, or delete: what it needs the internet for, in plain words
+
+slots:                                   # the gaps: everything that depends on one particular home
+  data:
+    type: folder
+    suggest: app-folder                  # next to your other apps' data
+    question: "Where should My App keep its data"              # CHANGE: everyday words, what it's for
+    help: "Everything it saves lives here. Back this folder up with the rest."   # CHANGE: why, and what happens
+  address:
+    type: port
+    suggest: free-port
+    default: 8080                        # CHANGE: the app's usual port
+    question: "The address you'll open it at, at home"
+    help: "The number after the machine's address in your browser. Another one is fine if this is taken."
+  admin_password:
+    type: secret
+    source: generate                     # made by the updater, kept in the project's .env, never shown in the recipe
+    length: 32
+    question: "A password for its admin account"
+    help: "Made for you and kept safely; you'll see it once, after installing."
+
+tips:
+  - "Open http://<this machine>:{{address}} and sign in as admin."   # CHANGE: the first thing to do after installing
+
+compose:
+  services:
+    my-app:                              # CHANGE: the service's name
+      image: owner/my-app:1.2.3          # CHANGE: name and tag only; the updater pins the digest when installing
+      ports: ["{{address}}:8080"]        # CHANGE the inside port (after the colon) to the app's own
+      volumes: ["{{data}}:/data"]        # CHANGE the inside path to where the app keeps its data
+      environment:
+        ADMIN_PASSWORD: "{{admin_password}}"   # a secret only ever as a whole value
+      restart: unless-stopped
+
+update:
+  main: my-app                           # CHANGE: the service above
+  tags: '^\d+\.\d+\.\d+$'                # which tags are versions (must match the tag above)
+  health: {check: http-status, service: my-app, path: /, answer_below: 400, wait: 120}   # the page answers
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image}   # CHANGE: see STANDARD.md, Updating

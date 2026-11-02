@@ -1,0 +1,51 @@
+# Vaultwarden — a Bitwarden-compatible password server. EXAMPLE (not installable): shows the format; versions are illustrative.
+schema: 1
+id: example.vaultwarden
+name: Vaultwarden
+summary: Password manager (works with the Bitwarden apps)
+category: security
+version: "1.34.3"
+links: {home: https://github.com/dani-garcia/vaultwarden/wiki, notes: https://github.com/dani-garcia/vaultwarden/releases}
+needs: {platforms: [amd64, arm64], memory_mb: 128, https: "the Bitwarden apps only work over HTTPS: put it behind Traefik before using it"}
+
+slots:
+  data:
+    type: folder
+    suggest: app-folder
+    sub: data
+    question: "Where should Vaultwarden keep your passwords?"
+    help: "Your saved passwords are stored here, locked with your master password. Make sure this folder is in your backups: if it's lost, so are the passwords."
+  address:
+    type: url
+    suggest: your-domain
+    prefix: "vault."
+    question: "The secure address it will have"
+    help: "The Bitwarden apps on your phone and computer only connect to a secure (https) address. Use the one you'll set up for it, for example vault.yourdomain."
+  signups:
+    type: choice
+    options: {"Only people I invite": "false", "Anyone who finds the page": "true"}
+    default: "Only people I invite"
+    question: "Who can make an account?"
+    help: "Choose 'Only people I invite' unless you really want strangers to be able to sign up."
+  web_port: {type: port, default: 8081, suggest: free-port, advanced: true, question: "The address at home (before the secure one is set up)",
+             help: "Used by the secure address behind the scenes; you won't normally open this one."}
+
+tips:
+  - "It isn't usable until its secure address works (manual: put it behind Traefik). Until then, nothing can connect to it from the Bitwarden apps."
+
+compose:
+  services:
+    vaultwarden:
+      image: docker.io/vaultwarden/server:1.34.3
+      ports: ["{{web_port}}:80"]
+      volumes: ["{{data}}:/data"]
+      environment:
+        DOMAIN: "{{address}}"
+        SIGNUPS_ALLOWED: "{{signups}}"
+        # no ADMIN_TOKEN: the admin page stays off (turning it on is a deliberate step by hand)
+
+update:
+  main: vaultwarden
+  tags: '^(\d+\.\d+\.\d+)$'
+  health: {check: http-status, service: vaultwarden, path: /alive, answer_below: 300, wait: 60}
+  major: {one_at_a_time: true, dump: {kind: stop-and-copy, folder: data}, rollback: none}

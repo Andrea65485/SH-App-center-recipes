@@ -1,0 +1,54 @@
+# Mealie — recipes, meal plans, shopping lists. EXAMPLE (not installable): shows the format; versions are illustrative.
+schema: 1
+id: example.mealie
+name: Mealie
+summary: Recipes, meal plans, shopping lists
+category: home
+version: "3.4.0"
+links: {home: https://docs.mealie.io, notes: https://github.com/mealie-recipes/mealie/releases}
+needs: {platforms: [amd64, arm64], memory_mb: 512}
+
+slots:
+  data:
+    type: folder
+    suggest: app-folder
+    sub: data
+    question: "Where should Mealie keep your recipes?"
+    help: "Your recipes, their photos and Mealie's own records are saved here."
+  web_port:
+    type: port
+    default: 9925
+    suggest: free-port
+    question: "The address you'll open it at, at home"
+    help: "You'll type this into a browser on your home network. The number at the end tells the NAS which app you want — each app has its own."
+  signup:
+    type: choice
+    options: {"Only people I invite": "false", "Anyone who finds the page": "true"}
+    default: "Only people I invite"
+    question: "Who can make an account?"
+    help: "Choose 'Only people I invite' unless you want anyone on your network to be able to sign up."
+  timezone: {type: timezone, suggest: host, question: "Your time zone", help: "Used for the dates in your meal plans."}
+  address:  {type: url, suggest: lan-address, advanced: true, question: "The address in links it shares",
+             help: "Used when Mealie makes a link, for example to share a recipe. The suggestion is its address at home."}
+  user:     {type: user, suggest: host, advanced: true, question: "Who owns the files it saves",
+             help: "The NAS account its files belong to. The suggestion is your own account: leave it unless you know why."}
+
+compose:
+  services:
+    mealie:
+      image: ghcr.io/mealie-recipes/mealie:v3.4.0
+      ports: ["{{web_port}}:9000"]
+      volumes: ["{{data}}:/app/data"]
+      environment:
+        BASE_URL: "{{address}}"
+        ALLOW_SIGNUP: "{{signup}}"
+        TZ: "{{timezone}}"
+        PUID: "{{user.uid}}"
+        PGID: "{{user.gid}}"
+      deploy: {resources: {limits: {memory: 1000M}}}
+
+update:
+  main: mealie
+  tags: '^v(\d+\.\d+\.\d+)$'
+  health: {check: http-status, service: mealie, path: /api/app/about, answer_below: 300, wait: 120}
+  major: {one_at_a_time: true, dump: {kind: stop-and-copy, folder: data}, rollback: none}

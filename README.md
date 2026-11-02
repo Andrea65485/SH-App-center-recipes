@@ -24,10 +24,24 @@ your key, not this one. Please don't point an updater at this repository and rel
   who took over the GitHub account still couldn't publish a recipe an updater would accept.
 - Versions are pinned by digest at install time; the tag in a recipe is the version it was written and tested for.
 
+## Write your own recipes
+
+1. Read **[STANDARD.md](STANDARD.md)**, the format, with every rule the checker enforces.
+2. Copy **[TEMPLATE.yaml](TEMPLATE.yaml)** to `<app>/recipe.yaml`; the comments say what to change.
+3. Look at **[examples/](examples/)** for more: a database and a generated password (`paperless-ngx`), HTTPS and an
+   admin page kept off (`vaultwarden`), the simplest case (`mealie`), switches, a question behind a switch, a key you
+   paste in and declared extra access (`tailscale`). `piper/` is a real, published one.
+4. Check it: `python3 tools/check.py <app>/recipe.yaml --permissions` (Python 3.11+ and PyYAML). Then check the whole
+   repository: `python3 tools/check.py .`
+5. In your fork, sign and publish with your own key: `python3 tools/publish.py . --key ~/.ssh/<your-id>-signing`
+   (see STANDARD.md, *Signing and publishing*).
+
 ## Files
 
 - `repository.yaml` — this repository's id (`sh-app-centre`: every recipe id starts with it) and maintainer.
 - `<app>/recipe.yaml`, `<app>/description.md` — one app.
+- `examples/` — examples of the format: checked, but never in the index (not installable).
+- `tools/` — the checker and the publish script (the updater's own checking code, copied).
 - `index.yaml`, `index.yaml.sig` — made by the maintainer's publish script; never edited by hand.
 
 This repository's signing key: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDrCHFLVrJleMkQfo3PAKEilQu1a8mKHsCxzmANJlFHc`,

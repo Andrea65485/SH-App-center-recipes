@@ -1,0 +1,79 @@
+# Paperless-ngx — scan, OCR and file paper documents. EXAMPLE (not installable): shows the format; versions are illustrative.
+schema: 1
+id: example.paperless-ngx
+name: Paperless-ngx
+summary: Scan, OCR and file your paper documents
+category: documents
+version: "2.20.4"
+links: {home: https://docs.paperless-ngx.com, notes: https://github.com/paperless-ngx/paperless-ngx/releases}
+needs: {platforms: [amd64, arm64], memory_mb: 1024, internet: "downloads OCR languages on first start"}
+
+slots:
+  # Written for someone new to a NAS: a plain question, then one or two sentences on why it's asked.
+  files:
+    type: folder
+    suggest: app-folder
+    question: "Where should Paperless keep its files?"
+    help: "Paperless needs a folder of its own on the NAS. It makes everything it needs inside it by itself: your filed documents, an inbox for new scans, its exports, and its own list of what's where."
+  documents: {type: folder, under: files, sub: media, advanced: true,
+              question: "A separate folder for your filed documents", help: "Only if you want the documents somewhere else, for example on a bigger disk."}
+  inbox:     {type: folder, under: files, sub: consume, advanced: true,
+              question: "A separate inbox for new scans", help: "Only if your scanner already saves to a folder you'd like to keep using."}
+  exports:   {type: folder, under: files, sub: export, advanced: true,
+              question: "A separate folder for exports", help: "Paperless can export everything in its own format, as an extra backup. They go here."}
+  data:      {type: folder, under: files, sub: data, advanced: true,
+              question: "A separate folder for its own records", help: "Its database and settings. Best left inside its main folder."}
+  ocr_lang:
+    type: choice
+    options: {English: eng, Italian: ita, German: deu, French: fra, Spanish: spa}
+    default: English
+    question: "Which language are most of your documents in?"
+    help: "So it can read the words in your scans and find them when you search. You can add more languages later."
+  web_port:
+    type: port
+    default: 8000
+    suggest: free-port
+    question: "The address you'll open it at, at home"
+    help: "You'll type this into a browser on your home network. The number at the end tells the NAS which app you want — each app has its own."
+  timezone: {type: timezone, suggest: host, question: "Your time zone", help: "Used for the dates on your documents."}
+  user:     {type: user, suggest: host, advanced: true, question: "Who owns the files it saves",
+             help: "The NAS account its files belong to. The suggestion is your own account: leave it unless you know why."}
+  db_pass:  {type: secret, length: 32, question: "Passwords",
+             help: "Paperless's parts talk to each other with passwords. They're made for you and kept safe on the NAS — you'll never need to type them."}
+  secret_key: {type: secret, length: 50, question: "Passwords", help: "(shown together with the one above)"}
+
+tips:
+  - "To file a paper, scan it into {{inbox}} from your scanner or phone. Paperless picks it up from there within a minute."
+
+compose:
+  services:
+    webserver:
+      image: ghcr.io/paperless-ngx/paperless-ngx:2.20.4
+      ports: ["{{web_port}}:8000"]
+      volumes:
+        - "{{data}}:/usr/src/paperless/data"
+        - "{{documents}}:/usr/src/paperless/media"
+        - "{{inbox}}:/usr/src/paperless/consume"
+        - "{{exports}}:/usr/src/paperless/export"
+      environment:
+        PAPERLESS_REDIS: redis://broker:6379
+        PAPERLESS_DBHOST: db
+        PAPERLESS_DBPASS: "{{db_pass}}"
+        PAPERLESS_SECRET_KEY: "{{secret_key}}"
+        PAPERLESS_OCR_LANGUAGE: "{{ocr_lang}}"
+        PAPERLESS_TIME_ZONE: "{{timezone}}"
+        USERMAP_UID: "{{user.uid}}"
+        USERMAP_GID: "{{user.gid}}"
+      depends_on: [db, broker]
+    db:                                      # its own database (one per app, decided 30 Oct)
+      image: postgres:17-alpine
+      volumes: ["{{data}}/postgres:/var/lib/postgresql/data"]
+      environment: {POSTGRES_DB: paperless, POSTGRES_USER: paperless, POSTGRES_PASSWORD: "{{db_pass}}"}
+    broker:
+      image: redis:8-alpine
+
+update:
+  main: webserver
+  tags: '^(\d+\.\d+\.\d+)$'
+  health: {check: http-status, service: webserver, path: /, answer_below: 500, wait: 180}
+  major: {one_at_a_time: true, dump: {kind: postgres, service: db}, rollback: none}
