@@ -28,10 +28,10 @@ slots:                                   # the gaps: everything that depends on 
     help: "The number after the machine's address in your browser. Another one is fine if this is taken."
   admin_password:
     type: secret
-    source: generate                     # made by the updater, kept in the project's .env, never shown in the recipe
-    length: 32
+    source: ask                          # you type it in: a generated secret is never shown, so it can't be one you sign in with
     question: "A password for its admin account"
-    help: "Made for you and kept safely; you'll see it once, after installing."
+    help: "You'll sign in with it, so keep it in your password manager. It's kept in the app's private settings file and never shown again. No spaces."
+  # A secret nobody types (a database password, an encryption key): source: generate, length: 32 — made on the machine.
 
 tips:
   - "Open http://<this machine>:{{address}} and sign in as admin."   # CHANGE: the first thing to do after installing

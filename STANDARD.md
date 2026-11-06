@@ -10,7 +10,7 @@ this text is wrong — please fix it in your fork).
 
 - [The repository](#the-repository) · [A recipe](#a-recipe) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
   [Extra access](#extra-access) · [What it can do (worked out, not declared)](#what-it-can-do-worked-out-not-declared) ·
-  [Updating](#updating) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
+  [Updating](#updating) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
   [Checking your recipe](#checking-your-recipe) · [Not in this version](#not-in-this-version)
 
 ## The repository
@@ -20,6 +20,8 @@ repository.yaml               schema: 1, id, name, maintainer, url — every rec
 index.yaml, index.yaml.sig    made by tools/publish.py, never by hand (see Signing and publishing)
 <app>/recipe.yaml             one folder per app; <app> = lowercase letters, digits, dashes
 <app>/description.md          optional, plain text (not yet covered by the signature: not shown by updaters yet)
+<app>/icon.svg or icon.png    optional: the app's icon (see Pictures)
+<app>/screenshots/1–4.webp    optional: up to 4 screenshots, .webp or .png (see Pictures)
 examples/<app>/recipe.yaml    examples: checked like recipes, but never listed in the index (not installable)
 ```
 
@@ -53,9 +55,9 @@ questions (port, volume, container, uid…).
 
 | Type | The updater suggests (`suggest:`) | An answer is accepted when |
 |---|---|---|
-| `folder` | `app-folder`: where your other apps keep their data, plus `sub` | an absolute path; no `..`, line breaks, `{`, `}`, `$` or backticks |
+| `folder` | `app-folder`: made for the app, where your other apps keep their data · `yours`: a folder you already have (your music), only read — see below | an absolute path; no `..`, line breaks, `{`, `}`, `$` or backticks |
 | `port` | `free-port`: the `default` if free there, else the next free one | a whole number 1024–65535 |
-| `secret` | — `source: generate` (+ `length` 16–128): made by the updater · `source: ask`: you paste it in (a sign-in key) | goes to the project's `.env` only, as `${NAME}` |
+| `secret` | — `source: generate` (+ `length` 16–128): made on the machine at install, **never shown** — for what nobody types (a database password, an encryption key) · `source: ask`: you type or paste it in (a password you'll sign in with, a sign-in key) | goes to the project's `.env` only, as `${NAME}`; an `ask` answer has no spaces, `{`, `}`, `$` or backticks |
 | `timezone`, `user` | `host`: read from the machine; shown, not asked (`user` has `.uid` and `.gid`) | |
 | `url` | `your-domain` (+ `prefix`), `lan-address` | one line, no spaces |
 | `choice` | — `options`: a list, or labels → values (`"English (UK) — Alan": en_GB-alan-medium`); `default` is one of them | one of the options |
@@ -65,7 +67,21 @@ questions (port, volume, container, uid…).
 | `text` | — | one line, no spaces, no `{`, `}`, `$` or backticks |
 
 More:
+- **A password you'll sign in with is `source: ask`.** A generated secret is never shown, not even once after
+  installing, so an admin password made that way couldn't be used.
 - **`advanced: true`** puts a gap under *More options*; its suggestion is used unless you open it.
+- **Every folder gap says which kind it is:** `suggest: app-folder` or `suggest: yours` (or `under:` a main folder).
+- **A folder of yours** (`suggest: yours`): a library you already keep, such as your music. The app only **reads** it:
+  - mount it whole and read only, `"{{music}}:/music:ro"` — no sub-path, never `:rw`, and only as a volume (not in
+    `environment` or `command`);
+  - no `default`, `sub`, `advanced` or `asked_if`, and nothing `under` it: it's always asked, and never made or written;
+  - at most 3 per app;
+  - **you approve it on the machine** before installing (the updater shows the exact line:
+    `sudo /usr/local/sbin/updater-gate-accept --folder <folder> <app>`). The machine refuses a root, a Team folder's or
+    your personal folder's top, another app's folders, a folder holding a hidden folder (`.ssh`) at its top, links, and
+    names with spaces. Anything inside the approved folder can change freely; the folder itself must stay the same one.
+  - **Read only isn't private:** the app can read everything there, and every app can reach the internet. Ask for the
+    narrowest folder that works (`Music`, not your whole personal folder).
 - **One folder question, not four:** a folder gap with `under: <main folder gap>` and `sub: <name>` is made inside the
   main folder. Only the main folder is asked.
 - **Switches** (`toggle`): you only flip them; the recipe fixes what *on* and *off* mean
@@ -84,16 +100,24 @@ More:
 |---|---|
 | `image` | a name and a tag (`rhasspy/wyoming-piper:2.5.2`); the updater pins the digest when it installs |
 | `ports` | `"{{a port gap}}:<inside port>"` — the outside port is always a port gap; none on the host network |
-| `volumes` | `"{{a folder gap}}[/sub/path]:<inside path>[:ro|:rw]"` — the outside path is always a folder gap: no fixed host paths, never the Docker socket |
+| `volumes` | `"{{a folder gap}}[/sub/path]:<inside path>[:ro|:rw]"` — the outside path is always a folder gap: no fixed host paths, never the Docker socket. A folder of yours: `"{{gap}}:<inside path>:ro"` exactly |
 | `environment` | NAMES → plain values; a secret only as a **whole** value (`DB_PASSWORD: "{{db_pass}}"`) |
 | `command` | a text or a list of texts |
 | `depends_on` | other services of the same recipe |
-| `user` | only `"{{<a user gap>.uid}}:{{<a user gap>.gid}}"`: the app runs as your own account instead of root. Never a fixed number, never `0` or `root` |
+| `user` | only `"{{<a user gap>.uid}}:{{<a user gap>.gid}}"`: the app runs as your own account instead of root. Never a fixed number, never `0` or `root`. **Use it wherever the image allows**: the app's folders are then made for that account. An image that switches accounts by itself (`PUID`/`PGID`) starts as root and finds folders it can't write to (*operation not permitted*, restarting) |
 | `restart`, `healthcheck` | plain values |
 | `deploy` | `resources` only |
 
 Plus, only when declared under `needs.elevated`: `network_mode: host`, `cap_add: [NET_ADMIN]`, `cap_add: [NET_RAW]`,
 `devices: [/dev/net/tun:/dev/net/tun]`. **One database per app:** an app that needs one brings its own.
+
+**Listen on `0.0.0.0`, not `::`.** Some machines give containers no IPv6, and an app that listens only on `::` then
+stops at start (*address not available*, restarting). Where the app has a setting for it, set it to `0.0.0.0` (n8n:
+`N8N_LISTEN_ADDRESS`, linkding: `LD_SERVER_HOST`). The port is reached over IPv4 anyway.
+
+**PostgreSQL 18 and later keep their data one level up:** mount the database's folder at `/var/lib/postgresql`. 17 and
+older use `/var/lib/postgresql/data`. A volume at the old place on 18 is ignored, and the database is lost on the next
+restart. Moving a recipe from 17 to 18 is therefore a major update (a dump first), never just a new tag.
 
 ## Extra access
 
@@ -115,8 +139,9 @@ install.
 ## What it can do (worked out, not declared)
 
 The list of what an app gets — shown on its store page, before installing, and afterwards — is **worked out from the
-recipe itself**: its volumes (*its own folder* when the gap is `suggest: app-folder` or inside one; otherwise *a folder
-you choose*, such as your music — each read and change, or read only with `:ro`), its ports or host network, the
+recipe itself**: its volumes (*its own folder* when the gap is `suggest: app-folder` or inside one, read and change or
+read only; *reads a folder you choose — read only; it can't change it. You approve it on the machine first* for
+`suggest: yours`), its ports or host network, the
 internet (every app can reach it), whether it runs as your own account (`user`), declared extra access, secrets, and
 what each switch would add. A recipe can't describe
 itself as harmless: its author supplies only the *reasons* beside extra access and the plain notes in `needs`.
@@ -144,6 +169,30 @@ update:
 - **`major.rollback`** after a major has started: `image` (back to the old image is safe) or `none` (the app changes its
   data on start: Roll back is switched off; the way back is the dump). An app that migrates its database on start is
   `none`.
+
+## Pictures
+
+An icon and up to 4 screenshots, named in the recipe, each with **where it comes from**:
+```yaml
+pictures:
+  icon: {file: icon.svg, source: project, from: "https://github.com/<project>/…/logo.svg", licence: "MIT, © <project>"}
+  screenshots:
+    - {file: screenshots/1.webp, source: install, caption: "Your library, freshly installed"}
+```
+| | Rule |
+|---|---|
+| `source` | `install` — taken by you on a **fresh install** (show nothing of yours: no names, addresses or files) · `project` — from the app's own site or repository, with `from` (an https address) and its `licence` · `mockup` — drawn to show the app: always labelled **Mockup** where it's shown |
+| Icon | `icon.svg` held to plain shapes (no scripts, no `on…` attributes, no images, links or styles that fetch anything) or `icon.png`, square, 128–512 px; at most 32 KiB |
+| Screenshots | `screenshots/1.webp` … `4.webp` (or `.png`), 640×360 to 1920×1200, at most 400 KiB each, checked by their real header |
+| Caption | each screenshot's, at most 120 characters of plain text — also what screen readers say |
+
+- **Signed like the recipe:** `publish.py` lists each picture in `index.yaml` with its SHA-256 and size. A picture
+  whose bytes differ refuses the whole repository; one that breaks the rules above is only left out.
+- **Look at each new picture yourself:** `publish.py` asks once per new picture whether it shows anything of yours.
+  No word list can look inside a picture.
+- **A picture from the project keeps its own licence**, named in the recipe; this repository's licence doesn't cover it.
+- **Updaters before 0.9.3 and store-watch before 1.1 refuse an index with pictures**: publish them with `--pictures`
+  once yours are updated.
 
 ## The file itself
 
@@ -182,7 +231,15 @@ in, declared extra access, a step by hand). `piper/` is a real, published one.
 
 ## Not in this version
 
+- **Writing into a folder of yours** (apps that save covers or tags next to your files): read only, always.
+- **Folder names with spaces** for a folder of yours (`My Music`): rename it first.
+- **Folders on other machines** (network shares) as a folder of yours.
+- **A secret inside a longer value** (`postgres://user:{{pass}}@db/app`): a secret can only be a whole value. Use the
+  app's separate setting for the password when it has one (for PostgreSQL clients, `PGPASSWORD`).
+- **Ports below 1024** (DNS's 53, a web server's 80) and **kernel settings** (`sysctls`, as VPNs use).
+- **Images outside Docker Hub and GitHub's registry** (codeberg.org, quay.io, lscr.io), and **tags with letters or
+  hashes** (`2024.10.22-7ca5933`): they install, but the dashboard can't follow their updates yet.
 - A settings **file** that contains secrets (some apps keep their tokens in a JSON or YAML file, not in environment
   variables) — such apps can't be written yet.
 - Optional containers (an extra service when a switch is on).
-- Descriptions and pictures covered by the signature (so updaters can show them).
+- Descriptions covered by the signature (so updaters can show them).

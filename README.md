@@ -50,3 +50,7 @@ fingerprint `SHA256:BWc7rfReJ655yZFGJyataqIjn/5zj0lRaxFJz+ZgXzg`.
 ## License
 
 MIT (see `LICENSE`): use, change and share freely; it comes with no warranty.
+
+**Except pictures from the projects themselves:** an icon or screenshot whose recipe says `source: project` keeps its
+project's own licence, named in that recipe (e.g. GameVault's icon: CC BY-NC-SA 4.0, © Phalcode). Pictures with
+`source: install` or `mockup` were made by this repository's maintainer and are covered by the MIT licence.

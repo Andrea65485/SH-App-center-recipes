@@ -18,7 +18,7 @@ import hashlib, os, re, subprocess, tempfile
 
 import yaml
 
-from . import recipe_check
+from . import pictures, recipe_check
 
 NAMESPACE = "homelab-updater-recipe-index"     # a signature made with the same key for anything else never passes
 MAX_INDEX = 256 * 1024
@@ -28,6 +28,10 @@ KEY = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]{68}$")                   # the onl
 REPO_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 APP = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 HEX = re.compile(r"^[0-9a-f]{64}$")
+# 0.9.3 / store-watch 1.1: an entry may also list the recipe's pictures, signed by being named here (SHA-256 + size).
+# Older readers refuse such an index: they go in before a repository publishes pictures (recipe-pictures-design.md §8).
+FILE = re.compile(r"^(icon\.(svg|png)|screenshots/[1-4]\.(webp|png))$")
+FILE_MAX = {"icon": pictures.MAX_ICON, "screenshots": pictures.MAX_SHOT}
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 Refused = recipe_check.Refused
 
@@ -119,10 +123,17 @@ def verify_index(index_bytes, sig_bytes, repo, ssh_keygen="ssh-keygen", now=None
     if not isinstance(rec, dict) or len(rec) > 500:
         raise Refused("index: 'recipes' must map app names to their files")
     for app, e in rec.items():
-        if not isinstance(app, str) or not APP.match(app) or not isinstance(e, dict) or set(e) != {"path", "sha256", "size"} \
+        if not isinstance(app, str) or not APP.match(app) or not isinstance(e, dict) or set(e) - {"files"} != {"path", "sha256", "size"} \
                 or e["path"] != f"{app}/recipe.yaml" or not isinstance(e["sha256"], str) or not HEX.match(e["sha256"]) \
                 or not isinstance(e["size"], int) or isinstance(e["size"], bool) or not 0 < e["size"] <= recipe_check.MAX_BYTES:
             raise Refused(f"index: the entry for {str(app)[:40]!r} isn't path / sha256 / size")
+        files = e.get("files", {})
+        if not isinstance(files, dict) or len(files) > 5 or not all(
+                isinstance(f, str) and FILE.match(f) and isinstance(x, dict) and set(x) == {"sha256", "size"}
+                and isinstance(x["sha256"], str) and HEX.match(x["sha256"]) and isinstance(x["size"], int)
+                and not isinstance(x["size"], bool) and 0 < x["size"] <= FILE_MAX[f.split(".")[0].split("/")[0]]
+                for f, x in files.items()):
+            raise Refused(f"index: the files listed for {str(app)[:40]!r} aren't icon/screenshots with sha256 / size")
     return ix
 
 
@@ -139,4 +150,20 @@ def verify_recipe(ix, app, data):
     err, _ = recipe_check.check(r, ix["repository"])
     if err:
         raise Refused(f"{app}: " + "; ".join(err))
+    listed = set(e.get("files", {}))
+    named = set(recipe_check.picture_files(r))
+    if named != listed:                       # the recipe and the signed index must agree on which pictures exist
+        raise Refused(f"{app}: its pictures and the signed index's list differ")
     return r
+
+
+def verify_file(ix, app, name, data):
+    """One picture of a recipe ('icon.svg', 'screenshots/1.webp'): exactly the bytes the signed index names → None, or
+    Refused (the repository is suspect); bytes right but the picture breaks the rules → the list of reasons (only that
+    picture is left out)."""
+    e = ((ix.get("recipes") or {}).get(app) or {}).get("files", {}).get(name)
+    if not e:
+        raise Refused(f"{app}: {str(name)[:40]} isn't in the signed index")
+    if not isinstance(data, bytes) or len(data) != e["size"] or hashlib.sha256(data).hexdigest() != e["sha256"]:
+        raise Refused(f"{app}: {name} isn't the file the signed index names (size or SHA-256 differ): refused")
+    return pictures.check_file(name, data)

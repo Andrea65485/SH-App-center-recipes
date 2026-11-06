@@ -14,9 +14,13 @@ the public repository (tools/publish.py there: bring your own key and, if you li
 2. Every <app>/recipe.yaml passes the updater's own checker, and its id is <repository id>.<app>.
 3. No home details anywhere (the word list, every file's text and name) and nothing that looks like a secret.
 4. Only the files the standard allows (repository.yaml, README.md, LICENSE, STANDARD.md, TEMPLATE.yaml, .gitignore,
-   index.yaml(.sig), <app>/recipe.yaml, <app>/description.md, <app>/icon.png|webp, <app>/screenshots/*.png|webp,
+   index.yaml(.sig), <app>/recipe.yaml, <app>/description.md, <app>/icon.svg|png, <app>/screenshots/1-4.webp|png,
    examples/<app>/recipe.yaml — checked, never indexed — and tools/*.py, tools/lib/homelab_updater/*.py).
 5. index.yaml: each recipe's path, SHA-256 and size; serial = the time (always higher than the last); expires.
+   Pictures (recipe-pictures-design.md): each one the recipe names must exist, pass the picture rules, and be named;
+   they're listed in the index with SHA-256 and size, so the signature covers them. Each NEW picture asks you once
+   whether it shows anything of yours (no word list can look inside a picture). An index with pictures is refused by
+   updaters up to 0.9.2 and store-watch up to 1.0.2: --pictures says those are updated.
 6. Signs it with `ssh-keygen -Y sign` (it asks the key's passphrase itself), then checks the result exactly as the
    updater will, with the key's .pub. Nothing is pushed: the git commands are printed, to run by hand.
 """
@@ -29,10 +33,10 @@ HERE = Path(__file__).resolve().parent
 for lib in (HERE / "lib", HERE.parent / "updater"):          # the public tools/lib, or the private homelab repository
     if (lib / "homelab_updater" / "recipe_check.py").is_file():
         sys.path.insert(0, str(lib)); break
-from homelab_updater import recipe_check as rc, repo_index as ri       # noqa: E402
+from homelab_updater import pictures as pics, recipe_check as rc, repo_index as ri       # noqa: E402
 
 TOP_FILES = {"repository.yaml", "README.md", "LICENSE", "STANDARD.md", "TEMPLATE.yaml", ".gitignore", "index.yaml", "index.yaml.sig"}
-APP_FILE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}/(recipe\.yaml|description\.md|icon\.(png|webp)|screenshots/[a-z0-9_-]{1,40}\.(png|webp))$")
+APP_FILE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}/(recipe\.yaml|description\.md|icon\.(svg|png)|screenshots/[1-4]\.(webp|png))$")
 OTHER_FILE = re.compile(r"^(examples/[a-z0-9][a-z0-9-]{0,59}/recipe\.yaml|tools/[a-z0-9_-]{1,40}\.py|tools/lib/homelab_updater/[a-z0-9_]{1,40}\.py)$")
 # what tokens look like — written in pieces, so this file never contains them whole (it's published itself)
 SECRETS = re.compile("|".join(["tsk" "ey-", "gh" "p_", "github" "_pat_", "glp" "at-", "xox" "[bap]-", "sk" "-[A-Za-z0-9]{20}",
@@ -40,15 +44,15 @@ SECRETS = re.compile("|".join(["tsk" "ey-", "gh" "p_", "github" "_pat_", "glp" "
 
 
 def problems(repo, words_file=None):
-    """(errors, notes, repository id, {app: bytes})."""
-    err, notes, recipes = [], [], {}
+    """(errors, notes, repository id, {app: bytes}, {app: {picture: bytes}})."""
+    err, notes, recipes, files = [], [], {}, {}
     try:
         meta = rc.parse((repo / "repository.yaml").read_bytes())
     except (OSError, rc.Refused) as e:
-        return [f"repository.yaml: {e}"], notes, None, recipes
+        return [f"repository.yaml: {e}"], notes, None, recipes, files
     rid = meta.get("id")
     if meta.get("schema") != 1 or not isinstance(rid, str) or not ri.REPO_ID.match(rid):
-        return ["repository.yaml: schema 1 and a plain lowercase id"], notes, None, recipes
+        return ["repository.yaml: schema 1 and a plain lowercase id"], notes, None, recipes, files
     for k in ("name", "maintainer", "url"):
         if not isinstance(meta.get(k), str) or not meta[k]:
             err.append(f"repository.yaml: needs '{k}'")
@@ -90,7 +94,30 @@ def problems(repo, words_file=None):
         err += [f"{d.name}: {x}" for x in e]
         notes += [f"{d.name}: {x}" for x in w]
         recipes[d.name] = data
-    return err, notes, rid, recipes
+        if e:
+            continue
+        named = rc.picture_files(r)
+        here = sorted(p.relative_to(d).as_posix() for p in list(d.glob("icon.*")) + list(d.glob("screenshots/*")) if p.is_file())
+        for extra in sorted(set(here) - set(named)):
+            err.append(f"{d.name}/{extra}: a picture the recipe doesn't name — name it in 'pictures' or remove it")
+        files[d.name] = {}
+        for name in named:
+            f = d / name
+            if not f.is_file():
+                err.append(f"{d.name}: its recipe names {name}, which isn't there"); continue
+            b = f.read_bytes()
+            err += [f"{d.name}/{x}" for x in pics.check_file(name, b)]
+            files[d.name][name] = b
+    return err, notes, rid, recipes, files
+
+
+def old_pictures(index_file):
+    """{(app, name): sha256} of the pictures in the index already published (empty if none)."""
+    try:
+        ix = rc.parse(index_file.read_bytes())
+        return {(app, n): x["sha256"] for app, e in (ix.get("recipes") or {}).items() for n, x in (e.get("files") or {}).items()}
+    except (OSError, rc.Refused, AttributeError, TypeError, KeyError):
+        return {}
 
 
 def main():
@@ -99,16 +126,34 @@ def main():
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--new-key", action="store_true", help="sign with a key other than the expected one (a key change)")
     ap.add_argument("--private-words"); ap.add_argument("--expect-key")
+    ap.add_argument("--pictures", action="store_true",
+                    help="publish pictures: every updater is 0.9.3 or later and store-watch 1.1 or later")
     a = ap.parse_args()
     repo = Path(a.repo)
-    err, notes, rid, recipes = problems(repo, a.private_words)
+    err, notes, rid, recipes, files = problems(repo, a.private_words)
     for n in notes:
         print("note:", n)
     if err:
         sys.exit("NOT PUBLISHED:\n  " + "\n  ".join(err))
     print(f"checked: repository {rid}, {len(recipes)} recipe(s): {', '.join(recipes) or 'none'}; no home details found")
+    n_pics = sum(len(x) for x in files.values())
+    if n_pics:
+        print(f"pictures: {n_pics}, all passing the rules ({', '.join(f'{app}: {len(x)}' for app, x in files.items() if x)})")
     if a.check_only:
         return
+    if n_pics and not a.pictures:
+        sys.exit("NOT PUBLISHED: the recipes have pictures. An index with pictures is refused WHOLE by updaters up to 0.9.2 "
+                 "and store-watch up to 1.0.2 — update them first, then run again with --pictures.")
+    seen = old_pictures(repo / "index.yaml")
+    new = [(app, n) for app, x in files.items() for n, b in x.items() if seen.get((app, n)) != hashlib.sha256(b).hexdigest()]
+    if new:
+        if not sys.stdin.isatty():
+            sys.exit("NOT PUBLISHED: new pictures need your own look first — run this in a terminal")
+        print("\nNew pictures — no word list can look inside a picture, so look at each one yourself:")
+        for app, n in new:
+            ans = input(f"  {app}/{n}: does it show anything of yours (names, addresses, your files)? Type no to go on: ")
+            if ans.strip().lower() != "no":
+                sys.exit(f"NOT PUBLISHED: {app}/{n} — replace it with one that shows nothing of yours")
     if not a.key or not 1 <= a.days <= 90:
         sys.exit("--key <private key> is needed, and --days must be 1–90")
     key = Path(a.key)
@@ -129,7 +174,11 @@ def main():
              f"generated: '{now:%Y-%m-%dT%H:%M:%SZ}'", f"expires: '{now + dt.timedelta(days=a.days):%Y-%m-%dT%H:%M:%SZ}'",
              "recipes:" if recipes else "recipes: {}"]
     for app, data in sorted(recipes.items()):
-        lines.append(f"  {app}: {{path: {app}/recipe.yaml, sha256: {hashlib.sha256(data).hexdigest()}, size: {len(data)}}}")
+        extra = ""
+        if files.get(app):
+            extra = ", files: {" + ", ".join(f"'{n}': {{sha256: {hashlib.sha256(b).hexdigest()}, size: {len(b)}}}"
+                                              for n, b in files[app].items()) + "}"
+        lines.append(f"  {app}: {{path: {app}/recipe.yaml, sha256: {hashlib.sha256(data).hexdigest()}, size: {len(data)}{extra}}}")
     index = ("\n".join(lines) + "\n").encode()
     old.write_bytes(index)
     sig = repo / "index.yaml.sig"
@@ -140,6 +189,9 @@ def main():
     ix = ri.verify_index(index, sig.read_bytes(), {"id": rid, "key": pub, "last_serial": 0})       # as the updater will
     for app, data in recipes.items():
         ri.verify_recipe(ix, app, data)
+        for n, b in files.get(app, {}).items():
+            if ri.verify_file(ix, app, n, b):
+                sys.exit(f"{app}/{n}: fails the picture rules after signing (a bug): don't push")
     print(f"signed and checked as the updater will: serial {serial}, expires {now + dt.timedelta(days=a.days):%d %b %Y}")
     print(f"key {ri.fingerprint(pub)}")
     print(f"\nthen, in {repo}:\n  git add -A && git commit -m 'Publish {serial}' && git push")

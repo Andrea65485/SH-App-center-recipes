@@ -16,7 +16,7 @@ import ipaddress, re, secrets, string
 import yaml
 
 MAX_BYTES = 64 * 1024
-TYPES = {"folder": {"app-folder"}, "port": {"free-port"}, "secret": set(), "timezone": {"host"}, "user": {"host"},
+TYPES = {"folder": {"app-folder", "yours"}, "port": {"free-port"}, "secret": set(), "timezone": {"host"}, "user": {"host"},
          "choice": set(), "toggle": set(), "number": set(), "text": set(), "url": {"your-domain", "lan-address"},
          "networks": {"home-network"}}
 SERVICE_KEYS = {"image", "ports", "volumes", "environment", "depends_on", "deploy", "restart", "healthcheck", "command", "user"}
@@ -38,8 +38,15 @@ SERVICE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}\.[a-z0-9][a-z0-9-]{0,59}$")
 SUB = re.compile(r"^[a-z0-9_-]{1,40}$")
+YOURS_MAX = 3                         # folders you already have, read only (gate 1.8: approved on the machine, at most 3)
 TOP_KEYS = {"schema", "id", "name", "summary", "category", "version", "links", "needs", "slots", "tips", "host_steps",
-            "compose", "update"}
+            "compose", "update", "pictures"}
+# pictures (recipe-pictures-design.md §8, owner 5 Nov): one icon, up to 4 screenshots, each with where it comes from.
+# The files themselves are checked by pictures.py and listed (SHA-256, size) in the signed index.
+PIC_ICON = re.compile(r"^icon\.(svg|png)$")
+PIC_SHOT = re.compile(r"^screenshots/[1-4]\.(webp|png)$")
+PIC_SOURCES = {"install", "project", "mockup"}     # a fresh install by the publisher · the app's own site or repository · a mockup
+PIC_FROM = re.compile(r"^https://[A-Za-z0-9.-]{1,100}(/[A-Za-z0-9._~%/#?=&+-]{0,300})?$")
 SLOT_KEYS = {"type", "question", "help", "suggest", "default", "advanced", "source", "length", "options", "on", "off",
              "under", "sub", "asked_if", "prefix"}
 NEEDS_KEYS = {"platforms", "memory_mb", "elevated", "internet", "https"}
@@ -72,6 +79,13 @@ def parse(text):
         r = yaml.load(text, Loader=_NoAliases)
     except Refused:
         raise
+    except yaml.MarkedYAMLError as e:                     # where it went wrong — never the text around it
+        m = e.problem_mark
+        where = f" at line {m.line + 1}, column {m.column + 1}" if m is not None else ""
+        what = str(e.problem or e.context or type(e).__name__)[:100]
+        raise Refused(f"not readable as YAML: {what}{where}" + (
+            " (a value containing ': ' or starting with a special character needs quotes)"
+            if "mapping values are not allowed" in what else ""))
     except (yaml.YAMLError, RecursionError, ValueError) as e:
         raise Refused(f"not readable as YAML ({type(e).__name__})")
     if not isinstance(r, dict):
@@ -95,6 +109,50 @@ def _strs(v, items=20, n=200):
 
 def _scalar(v, n=500):
     return _str(v, n) or isinstance(v, bool) or _int(v, -10**9, 10**9)
+
+
+def _picture(p, where, file_re, caption):
+    e = []
+    if not isinstance(p, dict) or set(p) - {"file", "source", "from", "licence", "caption"}:
+        return [f"pictures.{where}: file, source, and (for a picture from the project) from + licence" + (", caption" if caption else "")]
+    if not (_str(p.get("file"), 40) and file_re.match(p["file"])):
+        e.append(f"pictures.{where}: 'file' must be " + ("icon.svg or icon.png" if not caption else "screenshots/1.webp … 4.webp (or .png)"))
+    src = p.get("source")
+    if src not in PIC_SOURCES:
+        e.append(f"pictures.{where}: 'source' is install (your own fresh install), project (its own site or repository) or mockup")
+    if src == "project" and not (_str(p.get("from"), 400) and PIC_FROM.match(p["from"]) and _str(p.get("licence"), 120) and p["licence"].strip()):
+        e.append(f"pictures.{where}: a picture from the project names where (from: https://…) and its licence")
+    if src != "project" and ("from" in p or "licence" in p):
+        e.append(f"pictures.{where}: 'from' and 'licence' are only for a picture from the project")
+    if caption and not (_str(p.get("caption"), 120) and p["caption"].strip() and not UNSAFE.search(p["caption"])):
+        e.append(f"pictures.{where}: a caption of at most 120 characters, plain text (it's also what screen readers say)")
+    if not caption and "caption" in p:
+        e.append(f"pictures.{where}: the icon has no caption")
+    return e
+
+
+def pictures_shape(pics):
+    """Errors in a recipe's pictures section (the files themselves are checked by pictures.py)."""
+    if not isinstance(pics, dict) or not pics or set(pics) - {"icon", "screenshots"}:
+        return ["'pictures' holds an icon and/or screenshots"]
+    e = []
+    if "icon" in pics:
+        e += _picture(pics["icon"], "icon", PIC_ICON, caption=False)
+    shots = pics.get("screenshots", [])
+    if not isinstance(shots, list) or len(shots) > 4:
+        return e + ["pictures.screenshots: a list of at most 4"]
+    for i, p in enumerate(shots, 1):
+        e += _picture(p, f"screenshots[{i}]", PIC_SHOT, caption=True)
+    files = [p.get("file") for p in shots if isinstance(p, dict)]
+    if len(set(files)) != len(files):
+        e.append("pictures.screenshots: each file only once")
+    return e
+
+
+def picture_files(r):
+    """The picture files a passed recipe names, in order (icon first)."""
+    pics = r.get("pictures") or {}
+    return ([pics["icon"]["file"]] if "icon" in pics else []) + [p["file"] for p in pics.get("screenshots", [])]
 
 
 def shape(r):
@@ -130,6 +188,8 @@ def shape(r):
         if "elevated" in n and not (isinstance(n["elevated"], dict) and len(n["elevated"]) <= 4
                                     and all(_str(k, 30) and _str(v, 300) for k, v in n["elevated"].items())):
             e.append("needs.elevated: items with a reason in plain words")
+    if "pictures" in r:
+        e += pictures_shape(r["pictures"])
     slots = r.get("slots")
     if not isinstance(slots, dict) or len(slots) > 40:
         e.append("'slots' must map gap names to their description (at most 40)")
@@ -296,6 +356,15 @@ def check_slots(slots, err, warn):
             base = slots.get(s["under"], {})
             if base.get("type") != "folder" or "under" in base or t != "folder" or not s.get("sub"):
                 err.append(f"slot {name}: 'under' needs a folder gap of its own, a main folder gap, and a 'sub'")
+            elif base.get("suggest") == "yours":
+                err.append(f"slot {name}: nothing goes 'under' a folder of yours: it's only read, never made or written")
+        elif t == "folder" and s.get("suggest") not in ("app-folder", "yours"):
+            err.append(f"slot {name}: a folder gap says 'suggest: app-folder' (made for the app) or 'suggest: yours' "
+                       "(one you already have, read only)")
+        if t == "folder" and s.get("suggest") == "yours":
+            bad = sorted(k for k in ("sub", "default", "asked_if", "advanced") if k in s)
+            if bad:
+                err.append(f"slot {name}: a folder of yours is always asked, with no {', '.join(bad)}")
         if "asked_if" in s and slots.get(s["asked_if"], {}).get("type") != "toggle":
             err.append(f"slot {name}: 'asked_if' must name a toggle")
 
@@ -337,9 +406,14 @@ def _check(r, repo_id):
             for side in ("on", "off"):
                 in_toggles |= {m.group(1) for m in SLOT.finditer(str(s.get(side, "")))}
     used |= in_toggles
+    yours = {n for n, s in slots.items() if s.get("type") == "folder" and s.get("suggest") == "yours"}
+    if len(yours) > YOURS_MAX:
+        err.append(f"at most {YOURS_MAX} folders of yours per app ({len(yours)} declared)")
     for path, text in walk(r["compose"]):
         for m in SLOT.finditer(text):
             base, attr = m.groups(); used.add(base)
+            if base in yours and not re.match(r"^\.services\.[^.\[]+\.volumes\[[0-9]+\]$", path):
+                err.append(f"{path}: '{{{{{base}}}}}' is a folder of yours: it may only be a volume")
             if base not in slots:
                 err.append(f"{path}: '{{{{{base}}}}}' isn't declared: refused")
             elif attr and not (slots[base]["type"] == "user" and attr in ("uid", "gid")):
@@ -382,6 +456,9 @@ def _check(r, repo_id):
                 err.append(f"{sname}: volume {str(v)[:60]!r}: the outside path must be a folder gap (no fixed paths, no Docker socket)")
             elif str(v).count(":") > 2 or (str(v).count(":") == 2 and str(v).rsplit(":", 1)[1] not in ("ro", "rw")):
                 err.append(f"{sname}: volume {str(v)[:60]!r}: only ':ro' or ':rw' may follow the inside path")
+            elif m.group(1) in yours and not re.match(r"^\{\{\s*[a-z_][a-z0-9_]*\s*\}\}:/[A-Za-z0-9._/-]+:ro$", str(v)):
+                err.append(f"{sname}: volume {str(v)[:60]!r}: a folder of yours is mounted whole and read only: "
+                           f"'{{{{{m.group(1)}}}}}:/inside/path:ro'")
         if "user" in svc:
             m = USER_FORM.match(svc["user"])
             if not (m and slots.get(m.group(1), {}).get("type") == "user"):
@@ -542,6 +619,10 @@ def permissions(r):
             base = slots[name].get("under", name)
             folders.setdefault(base, set()).add("read only" if parts[-1] == "ro" else "read and change")
     for base, modes in folders.items():         # made for the app (app-folder, or inside one) vs one of yours it may use
+        if slots[base].get("suggest") == "yours":
+            out.append(("folder", f"reads a folder you choose ({slots[base]['question'].rstrip('?')}) — read only; it can't "
+                        "change it. You approve it on the machine first", "always"))
+            continue
         own = slots[base].get("suggest") == "app-folder"
         out.append(("folder", f"{'its own folder' if own else 'a folder you choose'} ({slots[base]['question'].rstrip('?')}) — "
                     + " / ".join(sorted(modes)), "always"))
@@ -564,7 +645,7 @@ def permissions(r):
         out.append(("extra", ELEVATED_WORDS[e], "always"))
     for s in slots.values():
         if s["type"] == "secret":
-            out.append(("secret", "a key you paste in (kept in .env, never shown)" if s.get("source") == "ask"
+            out.append(("secret", "a password or key you paste in (kept in .env, never shown)" if s.get("source") == "ask"
                         else "passwords made for it (kept in .env, never shown)", "always"))
     out = list(dict.fromkeys(out))
     out.append(("outside", "nothing from outside home: making it reachable from outside is a separate step, by hand", "always"))

@@ -1,0 +1,108 @@
+# GameVault — a shelf for your game installers. Facts read from the image
+# ghcr.io/phalcode/gamevault-backend:17.2.0 (5 Nov 2026; same digest on Docker Hub; amd64 + arm64), not from its docs:
+# - started as root, its entrypoint runs chown -R and chmod -R 775 on /files (your games): so `user:` (your account,
+#   which skips that branch) and the library read-only, always;
+# - usage analytics are ON by default, five of six destinations base64-hidden, falling through to the next host when
+#   one is DNS-blocked; ANALYTICS_ENABLED=false keeps the module from loading at all (and the web UI's CSP from listing
+#   them): fixed here, not a choice;
+# - its web page isn't in the image: at each start it downloads the newest stable 17.x web UI from GitHub
+#   (Phalcode/gamevault-frontend releases) with no checksum — outside the digest the Store pins and outside the cooldown.
+#   So it's a switch, off by default; its desktop app (GameVault 2) doesn't need it. Tested 5 Nov: off stops serving
+#   the page (404), but the download still happens at each start (its admin module loads the web-UI module whatever
+#   the setting) — nothing of it runs in your browser then;
+# - the FIRST account registered becomes admin, activated at once; later ones wait for the admin's activation;
+# - its web page carries its OWN analytics (consent on by default, as in the desktop app), which the server's setting
+#   doesn't reach; only the page's security policy stops it, and that's off by default: WEB_UI_CSP_MODE=enforce is
+#   fixed here (tested 5 Nov: every analytics address refused by the browser). The policy still lets the page load
+#   its font from rsms.me.
+# Pictures (5 Nov): the icon is the project's own logo; the screenshots are a fresh install here, with six fictional
+# games and covers drawn for them (a neutral account, a test address).
+# Licence: CC BY-NC-SA 4.0 (free for personal use; "not open-source").
+schema: 1
+id: sh-app-centre.gamevault
+name: GameVault
+summary: A shelf for the game installers you own, at home — download them from any browser, or play through its app.
+category: games
+version: "17.2.0"
+links: {home: "https://gamevau.lt", notes: "https://github.com/Phalcode/gamevault-backend/releases"}
+needs:
+  platforms: [linux/amd64, linux/arm64]
+  memory_mb: 512
+  internet: "Optional: game pictures and details from IGDB, only if you add your own IGDB keys. Its usage reports are switched off."
+slots:
+  data:
+    type: folder
+    suggest: app-folder
+    question: "Where should GameVault keep its records"
+    help: "Its database, pictures and logs. Back this folder up with the rest; your games stay where they are."
+  games:
+    type: folder
+    suggest: yours
+    question: "Your games: which folder"
+    help: "Your installers (.exe, archives). GameVault only reads them: it can't change or delete anything there. You'll approve it on the NAS."
+  address:
+    type: port
+    suggest: free-port
+    default: 8080
+    question: "The address you'll open it at, at home"
+    help: "The number after the machine's address in your browser and in its app. Another one is fine if it's taken."
+  web_ui:
+    type: toggle
+    default: false
+    "on": "true"
+    "off": "false"
+    question: "Its web page, to download games from a browser"
+    help: "On: your browser runs a page GameVault fetches from GitHub at each start (the newest 17.x, unchecked) and loads its font from rsms.me. Off: not shown; GameVault still fetches it, but nothing of it runs. Its app doesn't need it."
+  db_pass:
+    type: secret
+    source: generate
+    length: 32
+    question: "Passwords"
+    help: "GameVault and its database talk with a password made for you. You'll never need it."
+  timezone: {type: timezone, suggest: host, question: "Your time zone", help: "For the dates it shows."}
+  owner:
+    type: user
+    suggest: host
+    advanced: true
+    question: "Which account it runs as"
+    help: "Your own account, so it can read your games and nothing it shouldn't."
+tips:
+  - "Right after installing, make your account in its app (server address http://<this machine>:{{address}}): the first account becomes the admin. Later accounts wait until you activate them."
+  - "On a Linux PC or the Steam Deck, its app (GameVault 2) installs Windows games through Proton."
+compose:
+  services:
+    gamevault:
+      image: ghcr.io/phalcode/gamevault-backend:17.2.0
+      user: "{{owner.uid}}:{{owner.gid}}"
+      ports: ["{{address}}:8080"]
+      volumes: ["{{games}}:/files:ro", "{{data}}/media:/media", "{{data}}/logs:/logs", "{{data}}/config:/config",
+                "{{data}}/savefiles:/savefiles", "{{data}}/plugins:/plugins"]
+      environment:
+        DB_HOST: db
+        DB_USERNAME: gamevault
+        DB_PASSWORD: "{{db_pass}}"
+        DB_DATABASE: gamevault
+        ANALYTICS_ENABLED: "false"
+        WEB_UI_ENABLED: "{{web_ui}}"
+        WEB_UI_CSP_MODE: enforce
+        TZ: "{{timezone}}"
+      depends_on: [db]
+      restart: unless-stopped
+    db:
+      image: postgres:16-alpine
+      user: "{{owner.uid}}:{{owner.gid}}"
+      volumes: ["{{data}}/postgres:/var/lib/postgresql/data"]
+      environment: {POSTGRES_USER: gamevault, POSTGRES_PASSWORD: "{{db_pass}}", POSTGRES_DB: gamevault}
+      restart: unless-stopped
+update:
+  main: gamevault
+  tags: '^\d+\.\d+\.\d+$'
+  health: {check: http-status, service: gamevault, path: /api/status, answer_below: 400, wait: 300}
+  major: {one_at_a_time: true, dump: {kind: postgres, service: db}, rollback: none}
+pictures:
+  icon: {file: icon.svg, source: project, from: "https://github.com/Phalcode/gamevault-frontend/blob/master/public/logo.svg",
+         licence: "CC BY-NC-SA 4.0, © Phalcode"}
+  screenshots:
+    - {file: screenshots/1.webp, source: install, caption: "Your library: the installers it found in your folder, with covers"}
+    - {file: screenshots/2.webp, source: install, caption: "A game's page: download its installer; its details and notes"}
+    - {file: screenshots/3.webp, source: install, caption: "Administration: reindex your folder, back up its database"}
