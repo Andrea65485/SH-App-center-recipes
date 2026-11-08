@@ -2,17 +2,21 @@
 # Copy it to <app>/recipe.yaml, replace everything marked CHANGE, delete what you don't need, then check it:
 #     python3 tools/check.py <app>/recipe.yaml --permissions
 # The rules are in STANDARD.md; the examples/ folder shows databases, switches and extra access.
-schema: 1
+schema: 2                               # format 2: the Store's facts below (STANDARD.md, Format 2)
 id: example.my-app                      # CHANGE: <your repository id>.<the folder's name>
 name: My App                            # CHANGE: the app's name, as people know it
 summary: One line about what it does, for someone who has never heard of it.    # CHANGE
-category: tools                         # CHANGE (optional)
+category: tools                         # CHANGE: one of the 15 in STANDARD.md (media, music, photos, games, reading, documents, files,
+                                        #   smart-home, household, network, security, monitoring, development, automation, tools)
+# also: [files]                         # optional: up to 2 more categories
+licence: MIT                            # CHANGE: the app's licence as its SPDX name, read in the app's own repository
+use_from: [browser]                     # CHANGE: 1-4 of browser, desktop-app, phone-app, devices
 version: "1.2.3"                        # CHANGE: the version you wrote and tested this for (= the image tag below)
 links: {home: "https://github.com/owner/project", notes: "https://github.com/owner/project/releases"}   # CHANGE
 needs:
   platforms: [linux/amd64, linux/arm64]  # CHANGE: what the image is built for
   memory_mb: 256                         # CHANGE: roughly what it uses
-  internet: "Only to check for its own updates."   # CHANGE, or delete: what it needs the internet for, in plain words
+  internet: {level: optional, why: "Only to check for its own updates."}   # CHANGE: level none | optional | needed; why = what for, in plain words (leave out with none)
 
 slots:                                   # the gaps: everything that depends on one particular home
   data:

@@ -1,4 +1,4 @@
-# The recipe format (draft 0.6)
+# The recipe format (draft 0.7: format 2)
 
 A **recipe** describes one self-hosted app so that an updater can install and update it safely, with you. It is **data,
 not a script**: everything that is the same for everyone is written out, and every value that depends on *your* home
@@ -8,7 +8,7 @@ machines it can see, asks you, and keeps your answers on your own computer — t
 The checker in `tools/` enforces everything below; when this text and the checker disagree, the checker wins (and
 this text is wrong — please fix it in your fork).
 
-- [The repository](#the-repository) · [A recipe](#a-recipe) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
+- [The repository](#the-repository) · [A recipe](#a-recipe) · [Format 2: the Store's facts](#format-2-the-stores-facts) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
   [Extra access](#extra-access) · [What it can do (worked out, not declared)](#what-it-can-do-worked-out-not-declared) ·
   [Updating](#updating) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
   [Checking your recipe](#checking-your-recipe) · [Not in this version](#not-in-this-version)
@@ -29,12 +29,13 @@ examples/<app>/recipe.yaml    examples: checked like recipes, but never listed i
 
 | Field | What it holds | Limits |
 |---|---|---|
-| `schema` | always `1`; an updater refuses a schema it doesn't know | |
+| `schema` | `2` for a new recipe ([Format 2](#format-2-the-stores-facts)); `1` is the older format, still accepted. A reader that doesn't know a recipe's schema leaves that app out | |
 | `id` | `<repository id>.<app>`, the same `<app>` as its folder | lowercase letters, digits, dashes |
 | `name`, `summary`, `version` | the store page: what it's called, one line about it, the version written for | short texts |
-| `category` | optional, one word or two | ≤ 40 characters |
+| `category` | format 2: **required**, one from [the list](#format-2-the-stores-facts) · format 1: optional free text (the Store lists it under *Other*) | format 1: ≤ 40 characters |
+| `also`, `licence`, `use_from` | format 2 only: [see below](#format-2-the-stores-facts) | |
 | `links` | optional: `home`, `notes` (release notes) | addresses; updaters may show only some sites |
-| `needs` | `platforms` (e.g. `[linux/amd64, linux/arm64]`), `memory_mb`, plain notes `internet` and `https`, and `elevated` ([Extra access](#extra-access)) | |
+| `needs` | `platforms` (e.g. `[linux/amd64, linux/arm64]`), `memory_mb`, `internet` (format 2: `{level, why}`, [below](#format-2-the-stores-facts); format 1: a plain note), a plain note `https`, and `elevated` ([Extra access](#extra-access)) | |
 | `slots` | every gap: its type, its question, its help ([Gaps](#gaps)) | at most 40 |
 | `tips` | optional notes shown after installing; may show gaps, never secrets | at most 10 |
 | `host_steps` | optional things to do by hand on the machine, shown only when a switch is on | at most 5 |
@@ -42,6 +43,49 @@ examples/<app>/recipe.yaml    examples: checked like recipes, but never listed i
 | `update` | how to update it safely ([Updating](#updating)) | |
 
 **Any other field is refused.** No logic: no conditions, no loops, no commands — apart from the switches described below.
+
+## Format 2: the Store's facts
+
+`schema: 2` adds what a Store needs for its categories and filters. Everything else is the same as format 1.
+
+```yaml
+schema: 2
+category: documents                    # one from the list below
+also: [files]                          # optional: up to 2 more, for an app that belongs in two places
+licence: AGPL-3.0-only                 # the app's licence, its SPDX name
+use_from: [browser, phone-app]         # how people use it
+needs:
+  internet: {level: optional, why: "Downloads its OCR languages the first time you pick one."}
+```
+
+| Field | Rule |
+|---|---|
+| `category` | **required**, one of the 15 below |
+| `also` | optional: up to 2 more from the same list, not repeating `category` |
+| `licence` | **required**: the SPDX name of the **app's** licence (`AGPL-3.0-only`, `MIT`, `CC-BY-NC-SA-4.0`), or `LicenseRef-<name>` for one SPDX doesn't list. Read it in the app's own repository. Stores show it **as declared** by the recipe, never as checked |
+| `use_from` | **required**: 1–4 of `browser`, `desktop-app` (an app on a computer), `phone-app`, `devices` (other devices and apps talk to it; no page of its own, like an MQTT broker) |
+| `needs.internet` | **required**: `level` is `none` (works with no internet at all), `optional` (some features use it) or `needed` (it doesn't work without). `why`: what it uses the internet for, in plain words (required unless `none`) |
+
+**Categories** (the Store's words beside each): `media` Films, TV and audiobooks · `music` Music · `photos` Photos ·
+`games` Games · `reading` News, bookmarks and books · `documents` Documents and PDFs · `files` Files, sync and backups ·
+`smart-home` Smart home · `household` Household · `network` Network and remote access · `security` Passwords and
+logins · `monitoring` Monitoring and alerts · `development` Code · `automation` Automation · `tools` Small tools.
+
+**Worked out, never written** (the same code in every reader): whether it runs on arm64 (from `platforms`), whether it
+needs **a key of yours** (a pasted `secret`: *needed*; only behind a switch: *optional*; for now this counts a password
+you choose yourself too: see [Not in this version](#not-in-this-version)), whether it reads a folder of
+yours, whether it has extra access, and whether its licence is an **open-source** one. Open source = one of these
+OSI-approved names: AGPL-3.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0 (each `-only` or `-or-later`), MIT, Apache-2.0,
+BSD-2-Clause, BSD-3-Clause, MPL-2.0, ISC, EPL-2.0, EUPL-1.2, Unlicense, 0BSD, Zlib. Anything else (`CC-BY-NC-SA-4.0`,
+`BUSL-1.1`, `LicenseRef-…`) is shown as *not an open-source licence*.
+
+**A key you paste in can be optional** (format 2 only): a `secret` with `source: ask` and `asked_if: <switch>` is asked
+only while that switch is on, and may be used directly as a whole environment value. While the switch is **off**, its
+environment line isn't written at all, nor its line in `.env`. Example: game covers from an online database, with your
+own free keys, behind a switch that starts off.
+
+**Readers:** the Homelab updater from 0.9.5 and store-watch from 1.2 read format 2. Older ones leave a format-2 recipe
+out (*"signed, but this checker doesn't accept it (a newer format?)"*) and show the rest of the repository.
 
 ## Gaps
 
@@ -57,7 +101,7 @@ questions (port, volume, container, uid…).
 |---|---|---|
 | `folder` | `app-folder`: made for the app, where your other apps keep their data · `yours`: a folder you already have (your music), only read — see below | an absolute path; no `..`, line breaks, `{`, `}`, `$` or backticks |
 | `port` | `free-port`: the `default` if free there, else the next free one | a whole number 1024–65535 |
-| `secret` | — `source: generate` (+ `length` 16–128): made on the machine at install, **never shown** — for what nobody types (a database password, an encryption key) · `source: ask`: you type or paste it in (a password you'll sign in with, a sign-in key) | goes to the project's `.env` only, as `${NAME}`; an `ask` answer has no spaces, `{`, `}`, `$` or backticks |
+| `secret` | — `source: generate` (+ `length` 16–128): made on the machine at install, **never shown** — for what nobody types (a database password, an encryption key) · `source: ask`: you type or paste it in (a password you'll sign in with, a sign-in key) | goes to the project's `.env` only, as `${NAME}`; an `ask` answer has 8–199 characters, no spaces, `{`, `}`, `$` or backticks |
 | `timezone`, `user` | `host`: read from the machine; shown, not asked (`user` has `.uid` and `.gid`) | |
 | `url` | `your-domain` (+ `prefix`), `lan-address` | one line, no spaces |
 | `choice` | — `options`: a list, or labels → values (`"English (UK) — Alan": en_GB-alan-medium`); `default` is one of them | one of the options |
@@ -88,7 +132,8 @@ More:
   (`on: "--advertise-exit-node"`, `off: ""`). Optional settings always start **off**. An `on`/`off` value may contain
   other plain gaps, never a secret or another switch.
 - **`asked_if: <switch>`:** the gap is asked only while that switch is on — and may be used **only inside that switch's
-  `on` value**, never directly in the compose part (a gap that wasn't asked has no value).
+  `on` value**, never directly in the compose part (a gap that wasn't asked has no value). The one exception, in format
+  2: a secret you paste in ([above](#format-2-the-stores-facts)), whose line is left out while the switch is off.
 - **`host_steps`** (`if_on: [switches]`, `text`): changes outside the app a setting needs (turning on IP forwarding…).
   The updater shows them; it never does them.
 
@@ -224,7 +269,7 @@ python3 tools/check.py <app>/recipe.yaml --permissions     what the app would ge
 python3 tools/check.py <app>/recipe.yaml --fill answers.yaml   fill it in as a test: the compose file, the .env (masked), the tips
 ```
 
-Start from `TEMPLATE.yaml`. The examples show more: `examples/paperless-ngx` (three containers, its own database, one
+Start from `TEMPLATE.yaml` (format 2). The examples (still format 1) show more: `examples/paperless-ngx` (three containers, its own database, one
 main folder with four inside, a generated password), `examples/vaultwarden` (a password server: HTTPS, admin page off),
 `examples/mealie` (one container, SQLite), `examples/tailscale` (switches, a question behind a switch, a key you paste
 in, declared extra access, a step by hand). `piper/` is a real, published one.
@@ -243,3 +288,5 @@ in, declared extra access, a step by hand). `piper/` is a real, published one.
   variables) — such apps can't be written yet.
 - Optional containers (an extra service when a switch is on).
 - Descriptions covered by the signature (so updaters can show them).
+- **Telling a password you choose apart from a key from another service** (planned: `kind: password` on such a secret).
+  Until then, *No key of yours needed* also hides an app that only asks you to choose a sign-in password.

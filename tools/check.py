@@ -4,6 +4,7 @@
     python3 tools/check.py <repository folder>                    every <app>/recipe.yaml and examples/<app>/recipe.yaml
     python3 tools/check.py <recipe.yaml> --permissions            what the app would get, worked out from the recipe
     python3 tools/check.py <recipe.yaml> --fill answers.yaml      fill it in: the compose file, the .env (masked), the tips
+Also prints how a Store lists it (format 2: category, licence, internet level, a key of yours).
 Needs Python 3.11+ and PyYAML."""
 import sys
 sys.dont_write_bytecode = True          # no __pycache__ in the repository folder (publish refuses stray files)
@@ -18,6 +19,17 @@ def load(path):
         return rc.parse(Path(path).read_bytes())
     except (OSError, rc.Refused) as e:
         sys.exit(f"refused: {e}")
+
+
+def store_line(r):
+    """How a Store lists it (format 2's facts, worked out by the same code every reader uses)."""
+    f = rc.facts(r)
+    if r["schema"] != 2:
+        return "format 1: a Store lists it under Other, without licence or internet level (schema: 2 adds them)"
+    key = {"needed": "needed", "optional": "only behind a switch", "no": "not needed"}[f["own_key"]]
+    return (f"format 2: {', '.join(rc.CATEGORIES[c] for c in f['categories'])} · licence {f['licence']} ("
+            + ("open source" if f["open_source"] else "not an open-source licence") + f") · internet {f['internet']} · "
+            f"a key of yours {key} · " + ("runs on arm64" if f["pi"] else "not on arm64"))
 
 
 def check_file(f, repo_id):
@@ -48,6 +60,7 @@ if __name__ == "__main__":
     if e:
         sys.exit("refused:\n  " + "\n  ".join(e))
     print("✓ passes")
+    print("  Store:", store_line(r))
     try:
         if "--permissions" in sys.argv:
             for kind, what, when in rc.permissions(r):

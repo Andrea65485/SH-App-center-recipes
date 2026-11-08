@@ -50,6 +50,25 @@ PIC_FROM = re.compile(r"^https://[A-Za-z0-9.-]{1,100}(/[A-Za-z0-9._~%/#?=&+-]{0,
 SLOT_KEYS = {"type", "question", "help", "suggest", "default", "advanced", "source", "length", "options", "on", "off",
              "under", "sub", "asked_if", "prefix"}
 NEEDS_KEYS = {"platforms", "memory_mb", "elevated", "internet", "https"}
+# ---- format 2 (owner, 7 Nov: "more metadata for the store … categories or info for using filters"). Format 1 stays as
+# it is (today's readers know only it); format 2 adds the fields below, all checked here, and optional pasted secrets.
+SCHEMAS = (1, 2)
+TOP_KEYS_2 = TOP_KEYS | {"also", "licence", "use_from"}
+# One fixed list (format 1's free text had drifted into 16 spellings). The words are the Store's filter labels.
+CATEGORIES = {"media": "Films, TV and audiobooks", "music": "Music", "photos": "Photos", "games": "Games",
+              "reading": "News, bookmarks and books", "documents": "Documents and PDFs", "files": "Files, sync and backups",
+              "smart-home": "Smart home", "household": "Household", "network": "Network and remote access",
+              "security": "Passwords and logins", "monitoring": "Monitoring and alerts", "development": "Code",
+              "automation": "Automation", "tools": "Small tools"}
+USE_FROM = {"browser": "a browser", "desktop-app": "an app on a computer", "phone-app": "an app on a phone",
+            "devices": "other devices and apps (no page of its own)"}
+INTERNET = {"none": "doesn't need the internet", "optional": "uses the internet for some features",
+            "needed": "needs the internet to work"}
+LICENCE = re.compile(r"^(LicenseRef-[A-Za-z0-9.-]{1,40}|[A-Za-z0-9][A-Za-z0-9.+-]{1,49})$")      # an SPDX name
+# Open source = one of these (OSI-approved) — as the recipe DECLARES it: shown as declared, never as checked.
+OPEN_SOURCE = {"AGPL-3.0-only", "AGPL-3.0-or-later", "GPL-2.0-only", "GPL-2.0-or-later", "GPL-3.0-only", "GPL-3.0-or-later",
+               "LGPL-2.1-only", "LGPL-2.1-or-later", "LGPL-3.0-only", "LGPL-3.0-or-later", "MIT", "Apache-2.0",
+               "BSD-2-Clause", "BSD-3-Clause", "MPL-2.0", "ISC", "EPL-2.0", "EUPL-1.2", "Unlicense", "0BSD", "Zlib"}
 
 
 class Refused(ValueError):
@@ -160,16 +179,19 @@ def shape(r):
     e = []
     if not isinstance(r, dict):
         return ["the file isn't a mapping of fields"]
-    if r.get("schema") != 1:
+    if r.get("schema") not in SCHEMAS or isinstance(r.get("schema"), bool):
         return [f"schema {r.get('schema')!r} unknown: refused"]
-    for k in sorted(set(r) - TOP_KEYS, key=str):
+    v2 = r["schema"] == 2
+    for k in sorted(set(r) - (TOP_KEYS_2 if v2 else TOP_KEYS), key=str):
         e.append(f"unknown field {str(k)[:40]!r}")
     for k in ("id", "name", "summary", "version"):
         if not _str(r.get(k), 300) or not r.get(k):
             e.append(f"'{k}' must be a short text")
     if _str(r.get("id")) and not ID.match(r["id"]):
         e.append("'id' must look like <repository>.<app> (lowercase letters, digits, dashes)")
-    if "category" in r and not _str(r["category"], 40):
+    if v2:
+        e += shape_2(r)
+    elif "category" in r and not _str(r["category"], 40):
         e.append("'category' must be a short text")
     if "links" in r and not (isinstance(r["links"], dict) and len(r["links"]) <= 10
                              and all(_str(k, 30) and _str(v, 300) for k, v in r["links"].items())):
@@ -183,6 +205,8 @@ def shape(r):
         if "memory_mb" in n and not _int(n["memory_mb"], 1, 1 << 20):
             e.append("needs.memory_mb: a whole number of MB")
         for k in ("internet", "https"):
+            if k == "internet" and v2:
+                continue                    # format 2: a level and a reason (shape_2)
             if k in n and not _str(n[k], 300):
                 e.append(f"needs.{k}: a note in plain words")
         if "elevated" in n and not (isinstance(n["elevated"], dict) and len(n["elevated"]) <= 4
@@ -369,6 +393,45 @@ def check_slots(slots, err, warn):
             err.append(f"slot {name}: 'asked_if' must name a toggle")
 
 
+def shape_2(r):
+    """Format 2's own fields: one category from the list (+ up to 2 more), the licence's SPDX name, how it's used, and
+    the internet as a level with its reason."""
+    e = []
+    if r.get("category") not in CATEGORIES:
+        e.append(f"'category' must be one of: {', '.join(CATEGORIES)}")
+    also = r.get("also", [])
+    if not (isinstance(also, list) and len(also) <= 2 and all(a in CATEGORIES for a in also)
+            and len(set(also)) == len(also) and r.get("category") not in also):
+        e.append("'also': up to 2 more categories from the same list, different from 'category'")
+    if not (_str(r.get("licence"), 60) and LICENCE.match(r["licence"])):
+        e.append("'licence': the app's licence as its SPDX name (e.g. AGPL-3.0-only, MIT, CC-BY-NC-SA-4.0)")
+    u = r.get("use_from")
+    if not (isinstance(u, list) and 1 <= len(u) <= len(USE_FROM) and all(x in USE_FROM for x in u) and len(set(u)) == len(u)):
+        e.append(f"'use_from': 1–{len(USE_FROM)} of {', '.join(USE_FROM)}")
+    i = (r.get("needs") or {}).get("internet") if isinstance(r.get("needs"), dict) else None
+    if not (isinstance(i, dict) and set(i) <= {"level", "why"} and i.get("level") in INTERNET
+            and (_str(i.get("why"), 300) and i.get("why") if i.get("level") != "none" else ("why" not in i or _str(i["why"], 300)))):
+        e.append("needs.internet: {level: none|optional|needed, why: what it uses the internet for} (why: unless none)")
+    return e
+
+
+def facts(r):
+    """The Store's filter facts, worked out from a passed recipe (format 1 or 2) — most from what it already says, so
+    they can't drift from it. Format 1 has only its free-text category: it goes under 'other'."""
+    checked(r)
+    v2, slots, n = r["schema"] == 2, r["slots"], r.get("needs") or {}
+    asks = [s for s in slots.values() if s["type"] == "secret" and s.get("source") == "ask"]
+    return {"categories": ([r["category"]] + r.get("also", [])) if v2 else ["other"],
+            "pi": "linux/arm64" in (n.get("platforms") or []),
+            "memory_mb": n.get("memory_mb"),
+            "own_key": "needed" if any("asked_if" not in s for s in asks) else "optional" if asks else "no",
+            "your_folders": any(s["type"] == "folder" and s.get("suggest") == "yours" for s in slots.values()),
+            "extra_access": bool(n.get("elevated")),
+            "licence": r.get("licence"), "open_source": r.get("licence") in OPEN_SOURCE,
+            "internet": n["internet"]["level"] if v2 else None,
+            "use_from": r.get("use_from", [])}
+
+
 def check(r, repo_id=None):
     """(errors, notes) for one recipe (a parsed mapping). Errors = refused; notes = shown to the author only."""
     err = shape(r)
@@ -386,6 +449,9 @@ def _check(r, repo_id):
         err.append(f"id {r['id']} doesn't start with the repository's id '{repo_id}.'")
     slots = r["slots"]
     check_slots(slots, err, warn)
+    for name, s in slots.items():
+        if s.get("type") == "secret" and "asked_if" in s and r["schema"] != 2:
+            err.append(f"slot {name}: a secret asked only when a switch is on needs format 2 (schema: 2)")
     elevated = (r.get("needs") or {}).get("elevated") or {}
     for e, why in elevated.items():
         if e not in ELEVATED:
@@ -420,7 +486,7 @@ def _check(r, repo_id):
                 err.append(f"{path}: '.{attr}' isn't allowed on a {slots[base]['type']}")
             elif slots[base]["type"] == "secret" and not (".environment." in path and WHOLE.match(text)):
                 err.append(f"{path}: a secret may only be a whole environment value (so it can go to .env)")
-            elif "asked_if" in slots[base]:
+            elif "asked_if" in slots[base] and slots[base]["type"] != "secret":
                 err.append(f"{path}: '{{{{{base}}}}}' is only asked when a switch is on: use it inside that switch's 'on' value")
     for path, text in walk(r.get("tips", []) + [h.get("text", "") for h in r.get("host_steps", [])]):
         for m in SLOT.finditer(text):
@@ -516,7 +582,9 @@ def valid(slot, value):
         return _int(value, 1024, 65535)
     if t == "number":
         return _int(value, -10**9, 10**9)
-    if t in ("text", "url", "timezone") or (t == "secret" and slot.get("source") == "ask"):
+    if t == "secret" and slot.get("source") == "ask":            # the gate takes 8–512 (gate 1.5): refused here first
+        return isinstance(value, str) and 8 <= len(value) < 200 and not UNSAFE.search(value) and " " not in value.strip()
+    if t in ("text", "url", "timezone"):
         return isinstance(value, str) and 0 < len(value) < 200 and not UNSAFE.search(value) and " " not in value.strip()
     if t == "choice":
         o = slot.get("options") or []
@@ -532,6 +600,9 @@ def valid(slot, value):
     if t == "user":
         return isinstance(value, dict) and set(value) == {"uid", "gid"} and all(_int(value[k], 0, 1 << 31) for k in ("uid", "gid"))
     return False                        # a type this code doesn't know never gets an answer through
+
+
+LEFT_OUT = object()                     # a secret whose switch is off: its environment entry isn't written at all
 
 
 def fill(r, answers, rng=secrets):
@@ -561,6 +632,8 @@ def _fill(r, answers, rng, for_gate):
         return v
 
     for name, s in slots.items():           # plain gaps first; folders under a main folder and toggles after
+        if s["type"] == "secret" and "asked_if" in s and not answers.get(s["asked_if"], slots[s["asked_if"]]["default"]):
+            vals[name] = None; continue     # format 2: its switch is off → its environment entry is left out
         if s["type"] == "secret" and s.get("source", "generate") == "generate":
             vals[name] = {"generate": s["length"]} if for_gate else \
                 "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(s["length"]))
@@ -585,6 +658,8 @@ def _fill(r, answers, rng, for_gate):
         m = WHOLE.match(text)
         if m and slots[m.group(1)]["type"] == "secret":
             key, v = m.group(1).upper(), vals[m.group(1)]
+            if v is None:
+                return LEFT_OUT
             env[key] = v if not for_gate or isinstance(v, dict) else {"value": v}
             return "${" + key + "}"
         return " ".join(SLOT.sub(lambda m: str(vals[m.group(1)][m.group(2)] if m.group(2) else vals[m.group(1)]), text).split()) \
@@ -592,7 +667,7 @@ def _fill(r, answers, rng, for_gate):
 
     def rebuild(node):
         if isinstance(node, dict):
-            return {k: rebuild(v) for k, v in node.items()}
+            return {k: v for k, v in ((k, rebuild(v)) for k, v in node.items()) if v is not LEFT_OUT}
         if isinstance(node, list):
             return [rebuild(v) for v in node]
         return sub(node) if isinstance(node, str) else node
@@ -646,7 +721,7 @@ def permissions(r):
     for s in slots.values():
         if s["type"] == "secret":
             out.append(("secret", "a password or key you paste in (kept in .env, never shown)" if s.get("source") == "ask"
-                        else "passwords made for it (kept in .env, never shown)", "always"))
+                        else "passwords made for it (kept in .env, never shown)", s.get("asked_if", "always")))
     out = list(dict.fromkeys(out))
     out.append(("outside", "nothing from outside home: making it reachable from outside is a separate step, by hand", "always"))
     return out
