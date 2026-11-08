@@ -15,20 +15,30 @@
 #   doesn't reach; only the page's security policy stops it, and that's off by default: WEB_UI_CSP_MODE=enforce is
 #   fixed here (tested 5 Nov: every analytics address refused by the browser). The policy still lets the page load
 #   its font from rsms.me.
+# - covers and details come from IGDB (owned by Twitch/Amazon), only with your own keys; without them it logs "IGDB
+#   Metadata Provider is disabled" and shows plain tiles (read in its source, 7 Nov). Format 2: a switch, and the two
+#   keys asked only when it's on (off: their lines aren't written at all). It matches each game by its file name,
+#   sends that name to IGDB, and keeps the cover it downloads in its own folder;
+# - when the Twitch sign-in for IGDB fails (no internet, a DNS block, wrong keys) it logs the whole request, with the
+#   Client ID and Secret in plain text (tested 7 Nov, offline: 108 times). Its log FILES sit in the data folder, as
+#   your account (so in shares and backups): SERVER_LOG_FILES_ENABLED=false is fixed here; Docker's own log, root-only,
+#   still has everything (and the keys, if a sign-in fails);
 # Pictures (5 Nov): the icon is the project's own logo; the screenshots are a fresh install here, with six fictional
 # games and covers drawn for them (a neutral account, a test address).
 # Licence: CC BY-NC-SA 4.0 (free for personal use; "not open-source").
-schema: 1
+schema: 2
 id: sh-app-centre.gamevault
 name: GameVault
 summary: A shelf for the game installers you own, at home — download them from any browser, or play through its app.
 category: games
+licence: CC-BY-NC-SA-4.0
+use_from: [desktop-app, browser]
 version: "17.2.0"
 links: {home: "https://gamevau.lt", notes: "https://github.com/Phalcode/gamevault-backend/releases"}
 needs:
   platforms: [linux/amd64, linux/arm64]
   memory_mb: 512
-  internet: "Optional: game pictures and details from IGDB, only if you add your own IGDB keys. Its usage reports are switched off."
+  internet: {level: optional, why: "Game covers and details from IGDB (Twitch), if you switch them on with your own free keys: it sends IGDB the names of your games. Its usage reports are switched off."}
 slots:
   data:
     type: folder
@@ -51,8 +61,27 @@ slots:
     default: false
     "on": "true"
     "off": "false"
-    question: "Its web page, to download games from a browser"
-    help: "On: your browser runs a page GameVault fetches from GitHub at each start (the newest 17.x, unchecked) and loads its font from rsms.me. Off: not shown; GameVault still fetches it, but nothing of it runs. Its app doesn't need it."
+    question: "A web page as well as its app"
+    help: "Not needed: its app shows the same, covers included. On: your browser runs a page GameVault fetches from GitHub at each start (newest 17.x, unchecked), with its font from rsms.me. Off: not shown, though still fetched."
+  covers:
+    type: toggle
+    default: false
+    "on": "true"
+    "off": "false"
+    question: "Game covers and details from IGDB"
+    help: "IGDB is Twitch's game database. On: GameVault sends it the names of your games to find their covers, with two free keys of your own (next). Off: plain tiles, nothing sent."
+  igdb_id:
+    type: secret
+    source: ask
+    asked_if: covers
+    question: "Your IGDB Client ID, for the game covers"
+    help: "Free, from Twitch: at dev.twitch.tv/console (two-step sign-in on), Register Your Application, redirect http://localhost, category Application Integration, Confidential. Paste its Client ID. GameVault sends IGDB your games' names to find them."
+  igdb_secret:
+    type: secret
+    source: ask
+    asked_if: covers
+    question: "Its Client Secret"
+    help: "On the same page: New Secret. Paste it here; it's kept in a locked file on the machine. A new secret made later replaces this one."
   db_pass:
     type: secret
     source: generate
@@ -68,6 +97,7 @@ slots:
     help: "Your own account, so it can read your games and nothing it shouldn't."
 tips:
   - "Right after installing, make your account in its app (server address http://<this machine>:{{address}}): the first account becomes the admin. Later accounts wait until you activate them."
+  - "Covers appear on their own once it has read your folder. A wrong match can be changed in that game's settings (as the admin)."
   - "On a Linux PC or the Steam Deck, its app (GameVault 2) installs Windows games through Proton."
 compose:
   services:
@@ -83,8 +113,12 @@ compose:
         DB_PASSWORD: "{{db_pass}}"
         DB_DATABASE: gamevault
         ANALYTICS_ENABLED: "false"
+        SERVER_LOG_FILES_ENABLED: "false"
         WEB_UI_ENABLED: "{{web_ui}}"
         WEB_UI_CSP_MODE: enforce
+        METADATA_IGDB_ENABLED: "{{covers}}"
+        METADATA_IGDB_CLIENT_ID: "{{igdb_id}}"
+        METADATA_IGDB_CLIENT_SECRET: "{{igdb_secret}}"
         TZ: "{{timezone}}"
       depends_on: [db]
       restart: unless-stopped
