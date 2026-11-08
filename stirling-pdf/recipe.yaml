@@ -1,15 +1,37 @@
 # Stirling-PDF — PDF tools in the browser (merge, split, rotate, compress, convert, read scanned text), on your own machine.
-schema: 1
+# Facts read from Stirling-PDF v3.2.2's own files (tag v3.2.2, 8 Nov 2026), not from its docs:
+# - licence: its LICENSE is MIT except some folders (app/proprietary, app/saas, engine, frontend/src/processor and
+#   frontend/src/editor/{proprietary,desktop,saas,cloud}), which are under the "Stirling PDF User License": production
+#   use needs a paid licence; free only for internal trial, evaluation or minimal use. The image this recipe installs
+#   is built with those parts in (docker/embedded/Dockerfile: STIRLING_FLAVOR=proprietary, BUILD_PORTAL=true), although
+#   its image label says MIT. SPDX has no name for the mix, so: LicenseRef-Stirling-PDF-MIT-and-proprietary (a Store
+#   shows it as not an open-source licence);
+# - usage analytics (PostHog, and a Scarf tracking pixel) are undecided by default (settings.yml.template:
+#   enableAnalytics null), and its page then asks the first person who opens it; with no login, that's anyone at home.
+#   Fixed off here (SYSTEM_ENABLEANALYTICS, and both trackers by name), so the question never appears;
+# - looking for a newer version is done by your BROWSER, at Stirling's own server (supabase.stirling.com, with the
+#   version you run): as a pop-up when it starts (switched off here: SYSTEM_SHOWUPDATE) and whenever its settings'
+#   Software updates card is opened (SoftwareUpdatesCard.tsx; no setting stops that one);
+# - its sign-in is ON by default (security.enableLogin: true), and on its first start it makes the account admin with
+#   the public default password "stirling" (InitialSecuritySetup.java), to be changed at the first sign-in: until then
+#   anyone at home who signs in first chooses it. So the recipe asks for your password and passes it as
+#   security.initialLogin, used only when it has no accounts yet: no default account is ever made. Tested 8 Nov, offline:
+#   default password refused, yours accepted, also after a restart. Changing it later is done in its own settings.
+# Tested 8 Nov (3.2.2, offline): the page receives enableAnalytics/enablePosthog/enableScarf false and
+# shouldShowUpdate false (defaults: null, null, null, true).
+schema: 2
 id: sh-app-centre.stirling-pdf
 name: Stirling-PDF
 summary: PDF tools in your browser — merge, split, rotate, compress, convert, read scanned text — on your own machine.
-category: Documents
+category: documents
+licence: LicenseRef-Stirling-PDF-MIT-and-proprietary   # MIT core + proprietary-licensed parts in the image (see above)
+use_from: [browser]
 version: "3.2.2"
 links: {home: "https://github.com/Stirling-Tools/Stirling-PDF", notes: "https://github.com/Stirling-Tools/Stirling-PDF/releases"}
 needs:
   platforms: [linux/amd64, linux/arm64]
   memory_mb: 1024
-  internet: "Not needed for its work: your PDFs never leave home. It may look for a newer version of itself (only shown on its page)."
+  internet: {level: optional, why: "Not for its work: your PDFs never leave home. Opening its settings makes your browser ask Stirling's server for a newer version. Its usage reports and update pop-up are switched off."}
 
 slots:
   data:
@@ -35,11 +57,18 @@ slots:
     default: 8080
     question: "The address you'll open it at, at home"
     help: "You'll type it into a browser on your home network. 8080 is its usual one; another is fine if it's taken."
+  admin_password:
+    type: secret
+    source: ask
+    question: "The password you'll sign in with (account admin)"
+    help: "Stirling-PDF asks everyone who opens it to sign in. Choose a password here (from your password manager): it's set at its first start, so it never starts with its public default one. Change it later in its settings."
 
 tips:
   - "Open it in a browser at home: this machine's address, then :{{address}}."
   - "Reading scanned text (OCR) knows English, French, German, Portuguese and Chinese. For Italian, add ita.traineddata from github.com/tesseract-ocr/tessdata later."
-  - "There's no login: anyone on your home network can use it. Making it reachable from outside is a separate step, by hand."
+  - "Sign in as admin with the password you chose. You can add accounts for others at home in its settings."
+  - "Making it reachable from outside home is a separate step, by hand."
+  - "Parts of this image are under the Stirling PDF User License, which allows free use only for trial, evaluation or minimal use. Read it at the project to see whether your use fits."
 
 compose:
   services:
@@ -47,6 +76,13 @@ compose:
       image: stirlingtools/stirling-pdf:3.2.2
       ports: ["{{address}}:8080"]
       volumes: ["{{settings}}:/configs", "{{logs}}:/logs"]
+      environment:
+        SECURITY_INITIALLOGIN_USERNAME: admin
+        SECURITY_INITIALLOGIN_PASSWORD: "{{admin_password}}"
+        SYSTEM_ENABLEANALYTICS: "false"
+        SYSTEM_ENABLEPOSTHOG: "false"
+        SYSTEM_ENABLESCARF: "false"
+        SYSTEM_SHOWUPDATE: "false"
       restart: unless-stopped
       deploy: {resources: {limits: {memory: 2g}}}
 

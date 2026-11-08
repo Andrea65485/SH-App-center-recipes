@@ -1,33 +1,36 @@
 # Piper — a voice for Home Assistant (text to speech), on your own machine: Wyoming protocol, port 10200.
-schema: 1
+# Facts read from wyoming-piper v2.5.2's own files (8 Nov 2026), not from its docs:
+# - licences: wyoming-piper itself is MIT (its LICENSE), but it needs piper-tts >=1.8,<2 (its pyproject), which is
+#   OHF-Voice/piper1-gpl, GPL-3.0-or-later; the image ships both. Format 2 takes one name, so the recipe declares the
+#   stricter one, which covers the image as a whole: GPL-3.0-or-later. Both are open-source licences;
+# - voices are separate downloads, each under its own terms (its MODEL_CARD in rhasspy/piper-voices on Hugging Face).
+#   Offered here: only Cori (en_GB, medium), recorded from LibriVox (public domain) and trained from scratch. Left out:
+#   Lessac (its recordings are under a research-only licence, no commercial use), Alan (Mycroft's recordings, "All
+#   Rights Reserved", and built on Lessac), Paola (built on Lessac), Riccardo (its dataset's licence page couldn't be
+#   read). Anyone may still pick another voice by hand; its terms are then theirs to check;
+# - a voice is fetched from huggingface.co/rhasspy/piper-voices only when it isn't in the voices folder yet
+#   (download.py); the voice list is the one inside the image (no --update-voices);
+# - its voice-management web page has no login: left off (docker_run.sh only starts it if asked).
+schema: 2
 id: sh-app-centre.piper
 name: Piper
 summary: A voice for Home Assistant — turns its answers into speech, on your own machine, no cloud.
-category: Home automation
+category: smart-home
+licence: GPL-3.0-or-later      # the engine inside (piper-tts); wyoming-piper around it is MIT
+use_from: [devices]
 version: "2.5.2"
 links: {home: "https://github.com/rhasspy/wyoming-piper", notes: "https://github.com/rhasspy/wyoming-piper/blob/main/CHANGELOG.md"}
 needs:
   platforms: [linux/amd64, linux/arm64]
   memory_mb: 512
-  internet: "Only to download the voice you pick, the first time it starts (and any other voice you choose later)."
+  internet: {level: needed, why: "Once: the first time it starts, it downloads its voice (about 60 MB) from the Piper project on Hugging Face. After that it speaks with no internet."}
 
 slots:
   voices:
     type: folder
     suggest: app-folder
-    question: "Where should Piper keep its voices"
-    help: "Each voice is a download of about 60 MB, kept here so it isn't fetched again. Nothing private is stored in it."
-  voice:
-    type: choice
-    question: "Which voice should it speak with"
-    help: "The voice Home Assistant hears by default. You can change it later; more voices and languages exist."
-    options:
-      "English (UK) — Alan": en_GB-alan-medium
-      "English (UK) — Cori": en_GB-cori-medium
-      "English (US) — Lessac": en_US-lessac-medium
-      "Italiano — Paola": it_IT-paola-medium
-      "Italiano — Riccardo (smaller, lower quality)": it_IT-riccardo-x_low
-    default: "English (US) — Lessac"
+    question: "Where should Piper keep its voice"
+    help: "The voice is a download of about 60 MB, kept here so it isn't fetched again. Nothing private is stored in it."
   address:
     type: port
     suggest: free-port
@@ -37,13 +40,14 @@ slots:
 
 tips:
   - "In Home Assistant: Settings → Devices & services → Add integration → Wyoming Protocol, with this machine's address and {{address}}."
+  - "It speaks British English with the voice Cori, chosen because its recordings are public domain. Other voices exist, each under its own terms: read its model card before using one."
   - "Piper's optional voice-management web page has no login, so this recipe leaves it switched off."
 
 compose:
   services:
     piper:
       image: rhasspy/wyoming-piper:2.5.2
-      command: ["--voice", "{{voice}}"]
+      command: ["--voice", "en_GB-cori-medium"]
       ports: ["{{address}}:10200"]
       volumes: ["{{voices}}:/data"]
       restart: unless-stopped
@@ -52,4 +56,4 @@ update:
   main: piper
   tags: '^\d+\.\d+\.\d+$'
   health: {check: container-health, service: piper, wait: 300}     # the image's own health check (up to 5 min at first start)
-  major: {one_at_a_time: true, dump: {kind: none}, rollback: image} # voices are plain files; no database to migrate
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image} # the voice is a plain file; no database to migrate

@@ -30,7 +30,10 @@ your key, not this one. Please don't point an updater at this repository and rel
 2. Copy **[TEMPLATE.yaml](TEMPLATE.yaml)** to `<app>/recipe.yaml`; the comments say what to change.
 3. Look at **[examples/](examples/)** for more: a database and a generated password (`paperless-ngx`), HTTPS and an
    admin page kept off (`vaultwarden`), the simplest case (`mealie`), switches, a question behind a switch, a key you
-   paste in and declared extra access (`tailscale`). `piper/` and `stirling-pdf/` are real, published ones.
+   paste in and declared extra access (`tailscale`). `gamevault/`, `piper/` and `stirling-pdf/` are real, published
+   ones, all in format 2: `gamevault/` has covers behind a switch, its two keys asked only when it's on; `stirling-pdf/`
+   asks for its admin password, so it never starts with the app's public default one; `piper/` names the licences of
+   both the wrapper and the engine inside it.
 4. Check it: `python3 tools/check.py <app>/recipe.yaml --permissions` (Python 3.11+ and PyYAML). Then check the whole
    repository: `python3 tools/check.py .`
 5. In your fork, sign and publish with your own key: `python3 tools/publish.py . --key ~/.ssh/<your-id>-signing`
@@ -53,4 +56,11 @@ MIT (see `LICENSE`): use, change and share freely; it comes with no warranty.
 
 **Except pictures from the projects themselves:** an icon or screenshot whose recipe says `source: project` keeps its
 project's own licence, named in that recipe (e.g. GameVault's icon: CC BY-NC-SA 4.0, © Phalcode). Pictures with
-`source: install` or `mockup` were made by this repository's maintainer and are covered by the MIT licence.
+`source: install` or `mockup` were made by this repository's maintainer: what they add (made-up content such as
+sample games and their covers, and the pictures as taken) is covered by the MIT licence, but **the app's own
+interface they show stays under the app's licence**.
+
+**The apps themselves are not here.** A recipe only names an app's image, which is downloaded from the app's own
+project when someone installs it; each app comes under its own licence, which its recipe names (`licence:`). App
+names, logos and trademarks belong to their owners and are used only to say what a recipe installs. This repository
+is not affiliated with or endorsed by any of the projects it names.
