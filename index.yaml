@@ -1,10 +1,10 @@
 # Made by publish.py — do not edit by hand: the signature (index.yaml.sig) covers every byte.
 schema: 1
 repository: sh-app-centre
-serial: 20261108031419
-generated: '2026-11-08T03:14:19Z'
-expires: '2026-12-08T03:14:19Z'
+serial: 20261108042038
+generated: '2026-11-08T04:20:38Z'
+expires: '2026-12-08T04:20:38Z'
 recipes:
   gamevault: {path: gamevault/recipe.yaml, sha256: 6fb54410cec685b09a6400fb1ef77af12e0e671a725b3e3df97c9ddbeb85dadf, size: 8250, files: {'icon.svg': {sha256: 02838af297ef5d70d67f1e197be124bf489b06ac7659c6abd25ddd6a214fd7ca, size: 6497}, 'screenshots/1.webp': {sha256: 2db40fbeb1453e66e07bcc542c9a703a8ffbe4f8b8e5c3fec67f0ccc811062ee, size: 35802}, 'screenshots/2.webp': {sha256: 9f34d8e84cc8f89682b901f43ccc1624fefa2ddf170f55ed3eee24ca48776a59, size: 29312}, 'screenshots/3.webp': {sha256: 43113e99418445cabcaf2b1b9f4c3835805a6e06b5843392498de8d85ef7c66d, size: 23716}}}
-  piper: {path: piper/recipe.yaml, sha256: 4a427d10c249c59a45962f632bc5f880afc8d569defb9443540d9fe928cd7a20, size: 3497}
-  stirling-pdf: {path: stirling-pdf/recipe.yaml, sha256: 0e05ab978df6b2d291bb6bbb7abebd8e3961692a2f13f030775549148c4314bc, size: 5569}
+  piper: {path: piper/recipe.yaml, sha256: da666fcf3e16f0bbbc0be787e96d813be7b638f533cbe53560d21b05db0b7cc9, size: 3800, files: {'icon.svg': {sha256: ea72fa53e17dde313637842352125dabb609774c2f52aa2101fc9b39e2246556, size: 2586}}}
+  stirling-pdf: {path: stirling-pdf/recipe.yaml, sha256: b04bf24ad10a0b16ebbe1c745dae2f21c03da939539611c0d89e08009574b7d9, size: 6353, files: {'icon.svg': {sha256: f4c7bb6f1bd2199918f6b01a48a5297c91915d569d202522ad0f736afa524b56, size: 487}, 'screenshots/1.webp': {sha256: 8f2b18669cc231f3b704c120eccffc94ef6177d0bd534044721671db7cc3a606, size: 41770}, 'screenshots/2.webp': {sha256: b208bfbc2bd8dfc4dc3a8a6053372c725e823597f7bd908b8d0c786b15241501, size: 39824}, 'screenshots/3.webp': {sha256: 13161267c05ef6339d3144337a1709291ea16e8b96da755f9ef35b7ce8c08d3e, size: 43282}}}

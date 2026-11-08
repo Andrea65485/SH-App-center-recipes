@@ -1,4 +1,4 @@
-# SH App centre recipes
+# SH App center recipes
 
 **A proof of concept.** This repository shows how a small, personal "app centre" for self-hosted apps can work:
 recipes as plain data, a signed index, and an updater that checks everything before it touches a machine. The recipes

@@ -57,3 +57,7 @@ update:
   tags: '^\d+\.\d+\.\d+$'
   health: {check: container-health, service: piper, wait: 300}     # the image's own health check (up to 5 min at first start)
   major: {one_at_a_time: true, dump: {kind: none}, rollback: image} # the voice is a plain file; no database to migrate
+
+pictures:   # no screenshots: Piper has no screen of its own (Home Assistant speaks through it)
+  icon: {file: icon.svg, source: project, from: "https://github.com/rhasspy/piper/blob/master/etc/logo.svg",
+         licence: "MIT, © 2022 Michael Hansen (cropped to the hat and the P, on a white tile)"}

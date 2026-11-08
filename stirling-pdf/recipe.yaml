@@ -91,3 +91,11 @@ update:
   tags: '^\d+\.\d+\.\d+$'
   health: {check: http-status, service: stirling-pdf, path: "/", answer_below: 400, wait: 300}   # its page answers (Java: ~30 s at start)
   major: {one_at_a_time: true, dump: {kind: none}, rollback: image}   # settings are plain files; no database to migrate
+
+pictures:   # screenshots: a fresh 3.2.2 install with no internet, signed in as admin, three made-up PDFs
+  icon: {file: icon.svg, source: project, from: "https://github.com/Stirling-Tools/Stirling-PDF/blob/main/app/core/src/main/resources/static/favicon.svg",
+         licence: "MIT, © 2025 Stirling PDF Inc."}
+  screenshots:
+    - {file: screenshots/1.webp, source: install, caption: "A PDF open in its viewer, with every tool on the right: merge, compress, convert, read scanned text, sign, protect"}
+    - {file: screenshots/2.webp, source: install, caption: "Merge: put several PDFs together in the order you choose (here three made-up sample files)"}
+    - {file: screenshots/3.webp, source: install, caption: "Compress: make PDFs smaller, choosing how much quality to keep"}
