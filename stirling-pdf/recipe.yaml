@@ -60,6 +60,7 @@ slots:
   admin_password:
     type: secret
     source: ask
+    kind: password                     # one you choose to sign in with, not a key from another service
     question: "The password you'll sign in with (account admin)"
     help: "Stirling-PDF asks everyone who opens it to sign in. Choose a password here (from your password manager): it's set at its first start, so it never starts with its public default one. Change it later in its settings."
 

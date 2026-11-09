@@ -33,6 +33,7 @@ slots:                                   # the gaps: everything that depends on 
   admin_password:
     type: secret
     source: ask                          # you type it in: a generated secret is never shown, so it can't be one you sign in with
+    kind: password                       # one you make up yourself, not a key from another service: then it isn't "a key of yours"
     question: "A password for its admin account"
     help: "You'll sign in with it, so keep it in your password manager. It's kept in the app's private settings file and never shown again. No spaces."
   # A secret nobody types (a database password, an encryption key): source: generate, length: 32 — made on the machine.

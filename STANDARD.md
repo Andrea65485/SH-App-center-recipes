@@ -1,4 +1,4 @@
-# The recipe format (draft 0.7: format 2)
+# The recipe format (draft 0.8: format 2)
 
 A **recipe** describes one self-hosted app so that an updater can install and update it safely, with you. It is **data,
 not a script**: everything that is the same for everyone is written out, and every value that depends on *your* home
@@ -8,7 +8,8 @@ machines it can see, asks you, and keeps your answers on your own computer — t
 The checker in `tools/` enforces everything below; when this text and the checker disagree, the checker wins (and
 this text is wrong — please fix it in your fork).
 
-- [The repository](#the-repository) · [A recipe](#a-recipe) · [Format 2: the Store's facts](#format-2-the-stores-facts) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
+- [The repository](#the-repository) · [A recipe](#a-recipe) · [Format 2: the Store's facts](#format-2-the-stores-facts) ·
+  [Format 2: answers inside a longer value](#format-2-answers-inside-a-longer-value) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
   [Extra access](#extra-access) · [What it can do (worked out, not declared)](#what-it-can-do-worked-out-not-declared) ·
   [Updating](#updating) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
   [Checking your recipe](#checking-your-recipe) · [Not in this version](#not-in-this-version)
@@ -72,9 +73,8 @@ needs:
 logins · `monitoring` Monitoring and alerts · `development` Code · `automation` Automation · `tools` Small tools.
 
 **Worked out, never written** (the same code in every reader): whether it runs on arm64 (from `platforms`), whether it
-needs **a key of yours** (a pasted `secret`: *needed*; only behind a switch: *optional*; for now this counts a password
-you choose yourself too: see [Not in this version](#not-in-this-version)), whether it reads a folder of
-yours, whether it has extra access, and whether its licence is an **open-source** one. Open source = one of these
+needs **a key of yours** (a `secret` you paste in: *needed*; only behind a switch or only for some answers of a choice:
+*optional*; a password you choose yourself, `kind: password`, doesn't count), whether it reads a folder of yours, whether it has extra access, and whether its licence is an **open-source** one. Open source = one of these
 OSI-approved names: AGPL-3.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0 (each `-only` or `-or-later`), MIT, Apache-2.0,
 BSD-2-Clause, BSD-3-Clause, MPL-2.0, ISC, EPL-2.0, EUPL-1.2, Unlicense, 0BSD, Zlib. Anything else (`CC-BY-NC-SA-4.0`,
 `BUSL-1.1`, `LicenseRef-…`) is shown as *not an open-source licence*.
@@ -85,7 +85,78 @@ environment line isn't written at all, nor its line in `.env`. Example: game cov
 own free keys, behind a switch that starts off.
 
 **Readers:** the Homelab updater from 0.9.5 and store-watch from 1.2 read format 2. Older ones leave a format-2 recipe
-out (*"signed, but this checker doesn't accept it (a newer format?)"*) and show the rest of the repository.
+out (*"signed, but this checker doesn't accept it (a newer format?)"*) and show the rest of the repository. The
+additions in the next section, and `kind` and `shape` ([Gaps](#gaps)), need the updater 0.9.6 and store-watch 1.2.1:
+older readers leave a recipe that uses them out in the same way.
+
+## Format 2: answers inside a longer value
+
+Some apps take a password or key only inside a longer setting: an address with the password in it, or all their
+settings as one line of JSON. Format 2 can write your answers **inside** such a value. Instead of a plain text, the
+environment value is a small mapping:
+
+```yaml
+      environment:
+        CONFIG:
+          inside: json                   # how each answer is written in: json, url or plain
+          value: '{"settings":[{"provider":"example","domain":"{{domain}}","token":"{{example_token}}"}]}'
+```
+
+When the value depends on a choice (which provider you use), it has one text per answer of that choice, and the
+questions only one provider needs are asked only for it:
+
+```yaml
+slots:
+  provider:
+    type: choice
+    options: {"Example DNS": example, "Other DNS": other}
+    default: "Example DNS"
+    question: "Who looks after your domain"
+    help: "The company your domain is registered with."
+  example_token:
+    type: secret
+    source: ask
+    asked_if: {provider: [example]}      # asked only when this answer is chosen
+    question: "Its Example DNS token"
+    help: "Made on Example DNS's API page."
+  other_key:
+    type: secret
+    source: ask
+    asked_if: {provider: [other]}
+    question: "Its Other DNS key"
+    help: "Shown on your Other DNS account page."
+  # … domain: a text, asked always
+compose:
+  services:
+    ddns:
+      environment:
+        CONFIG:
+          inside: json
+          by: provider                   # one case per answer of this choice (its stored values)
+          cases:
+            example: '{"settings":[{"provider":"example","domain":"{{domain}}","token":"{{example_token}}"}]}'
+            other: '{"settings":[{"provider":"other","domain":"{{domain}}","key":"{{other_key}}"}]}'
+```
+
+| | Rule |
+|---|---|
+| `inside` | `json`: each answer is written as JSON text (`"` becomes `\"`), every gap sits inside a JSON text value, between quotes, and the whole value is valid JSON · `url`: each answer is percent-encoded, so `@`, `:` or `/` in a password can't break the address · `plain`: written as typed |
+| `value`, or `by` + `cases` | one text; or `by`: a choice that is always asked, with text values, and exactly one case per stored value of it |
+| What can go inside | a `secret` you paste in (`source: ask`), a `text`, a `url` or a `choice`, without `.uid`/`.gid`. Never a generated secret, a folder, a port, a switch, or a gap asked only while a switch is on. Each text holds **at least one secret you paste** (otherwise it's a plain value) |
+| Each text | one line; no `$`, no ` #`, no space at either end, not starting with a quote mark; at most 512 characters before the answers go in, and **8–512 once filled** (checked again when you install) |
+| Its name | it goes to `.env`: capitals, digits and `_`, starting with a capital, at most 41 characters; not the name of another such value or of a secret |
+
+**Installed like a secret:** the whole filled-in value goes to the project's `.env` only (one line, `NAME=value`), and
+the compose file gets `${NAME}`. A refused answer is named by its question and the rule it breaks, never shown.
+
+**Asked for some answers of a choice:** `asked_if: {<choice>: [its stored values]}` asks a gap only while that choice
+has one of those answers. Only a secret you paste, a text, an address or a choice can be asked this way, and the choice
+it names is always asked. Such a gap goes **only inside a value split `by` that choice**, in the cases it's asked for,
+and must be used in each of them. The updater hides it for the other answers and doesn't send it.
+
+**Where the app writes its settings:** some apps write the settings they were given back to a file at every start,
+keys and all. Point that file somewhere harmless. The DDNS updater, for example, gets `CONFIG_FILEPATH: /dev/null`, so the
+keys don't land in its data folder.
 
 ## Gaps
 
@@ -101,7 +172,7 @@ questions (port, volume, container, uid…).
 |---|---|---|
 | `folder` | `app-folder`: made for the app, where your other apps keep their data · `yours`: a folder you already have (your music), only read — see below | an absolute path; no `..`, line breaks, `{`, `}`, `$` or backticks |
 | `port` | `free-port`: the `default` if free there, else the next free one | a whole number 1024–65535 |
-| `secret` | — `source: generate` (+ `length` 16–128): made on the machine at install, **never shown** — for what nobody types (a database password, an encryption key) · `source: ask`: you type or paste it in (a password you'll sign in with, a sign-in key) | goes to the project's `.env` only, as `${NAME}`; an `ask` answer has 8–199 characters, no spaces, `{`, `}`, `$` or backticks |
+| `secret` | — `source: generate` (+ `length` 16–128): made on the machine at install, **never shown** — for what nobody types (a database password, an encryption key) · `source: ask`: you type or paste it in (a password you'll sign in with, a sign-in key) | goes to the project's `.env` only, as `${NAME}`; an `ask` answer has 8–199 characters, no spaces, `{`, `}`, `$` or backticks, and the `shape` if the recipe gives one (below) |
 | `timezone`, `user` | `host`: read from the machine; shown, not asked (`user` has `.uid` and `.gid`) | |
 | `url` | `your-domain` (+ `prefix`), `lan-address` | one line, no spaces |
 | `choice` | — `options`: a list, or labels → values (`"English (UK) — Alan": en_GB-alan-medium`); `default` is one of them | one of the options |
@@ -113,6 +184,14 @@ questions (port, volume, container, uid…).
 More:
 - **A password you'll sign in with is `source: ask`.** A generated secret is never shown, not even once after
   installing, so an admin password made that way couldn't be used.
+- **`kind: password`** (format 2, on a `source: ask` secret): a password you make up yourself, to sign in to the app,
+  not a key from another service. It doesn't count as *a key of yours*, so the *No key of yours needed* filter keeps
+  the app. Leave it out for a key you get from somewhere else (an API token, a sign-in key).
+- **`shape`** (on a `source: ask` secret): for a key the app takes in one shape only. `uuid` = 36 characters like
+  `1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f`, `hex32` = 32 characters; both made of digits and the small letters a to f.
+  An answer of another shape is refused on your computer, before it reaches the machine, with the shape in words.
+  Use it when the app checks the shape itself and would print a refused key in its log. The list is fixed: a recipe
+  can't bring its own pattern.
 - **`advanced: true`** puts a gap under *More options*; its suggestion is used unless you open it.
 - **Every folder gap says which kind it is:** `suggest: app-folder` or `suggest: yours` (or `under:` a main folder).
 - **A folder of yours** (`suggest: yours`): a library you already keep, such as your music. The app only **reads** it:
@@ -134,6 +213,8 @@ More:
 - **`asked_if: <switch>`:** the gap is asked only while that switch is on — and may be used **only inside that switch's
   `on` value**, never directly in the compose part (a gap that wasn't asked has no value). The one exception, in format
   2: a secret you paste in ([above](#format-2-the-stores-facts)), whose line is left out while the switch is off.
+- **`asked_if: {<choice>: [values]}`** (format 2): asked only for some answers of a choice, and used inside a value
+  split by that choice ([answers inside a longer value](#format-2-answers-inside-a-longer-value)).
 - **`host_steps`** (`if_on: [switches]`, `text`): changes outside the app a setting needs (turning on IP forwarding…).
   The updater shows them; it never does them.
 
@@ -146,7 +227,7 @@ More:
 | `image` | a name and a tag (`rhasspy/wyoming-piper:2.5.2`); the updater pins the digest when it installs |
 | `ports` | `"{{a port gap}}:<inside port>"` — the outside port is always a port gap; none on the host network |
 | `volumes` | `"{{a folder gap}}[/sub/path]:<inside path>[:ro|:rw]"` — the outside path is always a folder gap: no fixed host paths, never the Docker socket. A folder of yours: `"{{gap}}:<inside path>:ro"` exactly |
-| `environment` | NAMES → plain values; a secret only as a **whole** value (`DB_PASSWORD: "{{db_pass}}"`) |
+| `environment` | NAMES → plain values; a secret as a **whole** value (`DB_PASSWORD: "{{db_pass}}"`), or, in format 2, [inside a longer value](#format-2-answers-inside-a-longer-value) |
 | `command` | a text or a list of texts |
 | `depends_on` | other services of the same recipe |
 | `user` | only `"{{<a user gap>.uid}}:{{<a user gap>.gid}}"`: the app runs as your own account instead of root. Never a fixed number, never `0` or `root`. **Use it wherever the image allows**: the app's folders are then made for that account. An image that switches accounts by itself (`PUID`/`PGID`) starts as root and finds folders it can't write to (*operation not permitted*, restarting) |
@@ -279,14 +360,14 @@ in, declared extra access, a step by hand). `piper/` is a real, published one.
 - **Writing into a folder of yours** (apps that save covers or tags next to your files): read only, always.
 - **Folder names with spaces** for a folder of yours (`My Music`): rename it first.
 - **Folders on other machines** (network shares) as a folder of yours.
-- **A secret inside a longer value** (`postgres://user:{{pass}}@db/app`): a secret can only be a whole value. Use the
-  app's separate setting for the password when it has one (for PostgreSQL clients, `PGPASSWORD`).
+- **A generated secret inside a longer value** (`postgres://user:{{db_pass}}@db/app` with a password made for the
+  app): only a secret you paste goes inside a value. Use the app's separate setting for the password when it has one
+  (for PostgreSQL clients, `PGPASSWORD`).
 - **Ports below 1024** (DNS's 53, a web server's 80) and **kernel settings** (`sysctls`, as VPNs use).
 - **Images outside Docker Hub and GitHub's registry** (codeberg.org, quay.io, lscr.io), and **tags with letters or
   hashes** (`2024.10.22-7ca5933`): they install, but the dashboard can't follow their updates yet.
 - A settings **file** that contains secrets (some apps keep their tokens in a JSON or YAML file, not in environment
-  variables) — such apps can't be written yet.
+  variables) — such apps can't be written yet, unless the app also takes those settings in one environment value
+  ([inside a longer value](#format-2-answers-inside-a-longer-value)).
 - Optional containers (an extra service when a switch is on).
 - Descriptions covered by the signature (so updaters can show them).
-- **Telling a password you choose apart from a key from another service** (planned: `kind: password` on such a secret).
-  Until then, *No key of yours needed* also hides an app that only asks you to choose a sign-in password.

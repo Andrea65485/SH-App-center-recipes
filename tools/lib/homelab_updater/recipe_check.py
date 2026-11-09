@@ -11,7 +11,7 @@ reasons, or Refused) and never falls over on a malformed file. In order:
   permissions(r)      what the app would get, worked out from the recipe itself — never from text its author wrote
 """
 
-import ipaddress, re, secrets, string
+import ipaddress, json, re, secrets, string, urllib.parse
 
 import yaml
 
@@ -38,6 +38,13 @@ SERVICE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}\.[a-z0-9][a-z0-9-]{0,59}$")
 SUB = re.compile(r"^[a-z0-9_-]{1,40}$")
+INSIDE = {"json", "url", "plain"}     # 0.9.6: how each answer is written into a longer value (secret-in-value-design.md)
+IN_VALUE = {"secret", "text", "url", "choice"}       # the gaps that may go inside one: answers typed or chosen
+GATE_SECRET = re.compile(r"^[A-Z][A-Z0-9_]{0,40}$")   # the gate's own rule for a .env name (gate 1.5+)
+VALUE_MIN, VALUE_MAX = 8, 512         # the gate takes 8–512 printable characters, no $
+ENCODE = {"json": lambda x: json.dumps(x)[1:-1],                      # " → \", \ → \\, the rest as \uXXXX: one ASCII line
+          "url": lambda x: urllib.parse.quote(x, safe=""),            # @ : / and the rest can't break the address
+          "plain": lambda x: x}
 YOURS_MAX = 3                         # folders you already have, read only (gate 1.8: approved on the machine, at most 3)
 TOP_KEYS = {"schema", "id", "name", "summary", "category", "version", "links", "needs", "slots", "tips", "host_steps",
             "compose", "update", "pictures"}
@@ -48,7 +55,13 @@ PIC_SHOT = re.compile(r"^screenshots/[1-4]\.(webp|png)$")
 PIC_SOURCES = {"install", "project", "mockup"}     # a fresh install by the publisher · the app's own site or repository · a mockup
 PIC_FROM = re.compile(r"^https://[A-Za-z0-9.-]{1,100}(/[A-Za-z0-9._~%/#?=&+-]{0,300})?$")
 SLOT_KEYS = {"type", "question", "help", "suggest", "default", "advanced", "source", "length", "options", "on", "off",
-             "under", "sub", "asked_if", "prefix"}
+             "under", "sub", "asked_if", "prefix", "kind", "shape"}
+SECRET_KINDS = {"password"}          # 0.9.6: an ask secret with kind: password is one you choose, not a key of yours
+# 0.9.6: a key some apps take only in one shape. A closed list, never a recipe's own pattern. Refused here first: the app
+# itself would print what was typed in its log (the DDNS updater does), and that may be another password pasted by mistake.
+SHAPES = {"uuid": (re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+                   "36 characters in the shape xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, made of digits and the small letters a to f"),
+          "hex32": (re.compile(r"[0-9a-f]{32}"), "32 characters, made of digits and the small letters a to f")}
 NEEDS_KEYS = {"platforms", "memory_mb", "elevated", "internet", "https"}
 # ---- format 2 (owner, 7 Nov: "more metadata for the store … categories or info for using filters"). Format 1 stays as
 # it is (today's readers know only it); format 2 adds the fields below, all checked here, and optional pasted secrets.
@@ -128,6 +141,86 @@ def _strs(v, items=20, n=200):
 
 def _scalar(v, n=500):
     return _str(v, n) or isinstance(v, bool) or _int(v, -10**9, 10**9)
+
+
+def _entry_shape(v):
+    """0.9.6, format 2: an environment value with gaps inside — {inside, value} or {inside, by, cases}."""
+    if not (isinstance(v, dict) and isinstance(v.get("inside"), str) and v["inside"] in INSIDE):
+        return False
+    if set(v) == {"inside", "value"}:
+        return _str(v["value"], 2000)
+    c = v.get("cases")
+    return (set(v) == {"inside", "by", "cases"} and _str(v["by"], 40) and isinstance(c, dict) and 1 <= len(c) <= 40
+            and all(_str(k, 60) and _str(x, 2000) for k, x in c.items()))
+
+
+def _asked_if_shape(a):
+    """A switch's name, or (0.9.6, format 2) {a choice's name: [the values it's asked for]}."""
+    if isinstance(a, str):
+        return len(a) <= 40
+    return (isinstance(a, dict) and len(a) == 1 and all(
+        _str(k, 40) and isinstance(vs, list) and 1 <= len(vs) <= 40 and all(_str(x, 60) for x in vs)
+        and len(set(vs)) == len(vs) for k, vs in a.items()))
+
+
+def entries(compose):
+    """The environment values given as a mapping (0.9.6): (service, NAME, entry)."""
+    for sname, svc in (compose.get("services") or {}).items():
+        env = svc.get("environment") if isinstance(svc, dict) else None
+        for k, v in (env.items() if isinstance(env, dict) else ()):
+            if isinstance(v, dict):
+                yield sname, k, v
+
+
+def templates(e):
+    """(case or None, text) for each text an entry can become."""
+    return [(None, e["value"])] if "value" in e else list(e["cases"].items())
+
+
+def choice_values(s):
+    """A choice's stored values (what goes into the file), not its labels."""
+    o = s.get("options") or []
+    return list(o.values()) if isinstance(o, dict) else list(o)
+
+
+def chosen(slots, name, answers):
+    """A choice's stored value for these answers."""
+    s = slots[name]
+    v = answers.get(name, s.get("default"))
+    if isinstance(s.get("options"), dict):
+        return s["options"].get(v) if isinstance(v, str) else None
+    return v
+
+
+def asked_by(a):
+    """(choice, values) for an asked_if naming a choice's values; None for a switch's name or none."""
+    return next(iter(a.items())) if isinstance(a, dict) else None
+
+
+def is_asked(slots, s, answers):
+    """Whether this gap is asked for these answers: always, while its switch is on, or for some answers of a choice."""
+    a = s.get("asked_if")
+    if a is None:
+        return True
+    if isinstance(a, str):
+        return bool(answers.get(a, slots[a]["default"]))
+    c, vals = asked_by(a)
+    return chosen(slots, c, answers) in vals
+
+
+def value_problem(v):
+    """What would make the gate or Docker Compose refuse or change a filled value; None when it's fine."""
+    if len(v) > VALUE_MAX:
+        return f"would be {len(v)} characters: {len(v) - VALUE_MAX} more than the {VALUE_MAX} the machine takes"
+    if len(v) < VALUE_MIN:
+        return f"would be shorter than the {VALUE_MIN} characters the machine takes"
+    if not v.isprintable() or "$" in v:
+        return "would hold a line break, a $ or another character the machine refuses"
+    if " #" in v or v != v.strip():
+        return "would be cut short by Docker Compose (a ' #', or a space at the start or end)"
+    if v[0] in "\"'`":                 # the gate writes NAME=value unquoted: Compose would read a leading quote as quoting
+        return "would start with a quote mark, which Docker Compose reads as quoting"
+    return None
 
 
 def _picture(p, where, file_re, caption):
@@ -229,9 +322,11 @@ def shape(r):
         if not _str(s.get("type"), 20):
             e.append(f"{where}: needs a 'type'")
         for k, n_ in (("question", 200), ("help", 600), ("suggest", 30), ("source", 20), ("on", 300), ("off", 300),
-                      ("under", 40), ("asked_if", 40), ("prefix", 60)):
+                      ("under", 40), ("prefix", 60), ("kind", 20), ("shape", 20)):
             if k in s and not _str(s[k], n_):
                 e.append(f"{where}: '{k}' must be a text")
+        if "asked_if" in s and not _asked_if_shape(s["asked_if"]):
+            e.append(f"{where}: 'asked_if' is a switch's name, or {{a choice's name: [the answers it's asked for]}}")
         if "sub" in s and not (_str(s["sub"]) and SUB.match(s["sub"])):
             e.append(f"{where}: 'sub' is one plain folder name")
         if "length" in s and not _int(s["length"], 0, 1000):
@@ -273,8 +368,10 @@ def shape(r):
                 if k in svc and not _str(svc[k], 40):
                     e.append(f"{where}: '{k}' must be a short text")
             if "environment" in svc and not (isinstance(svc["environment"], dict) and len(svc["environment"]) <= 60 and
-                                             all(isinstance(k, str) and ENV_NAME.match(k) and _scalar(v) for k, v in svc["environment"].items())):
-                e.append(f"{where}: 'environment' maps NAMES to plain values")
+                                             all(isinstance(k, str) and ENV_NAME.match(k) and (_scalar(v) or _entry_shape(v))
+                                                 for k, v in svc["environment"].items())):
+                e.append(f"{where}: 'environment' maps NAMES to plain values (format 2 also: a value with gaps inside, "
+                         "as inside + value, or inside + by + cases)")
             if "command" in svc and not (_str(svc["command"], 500) or _strs(svc["command"], 30, 200)):
                 e.append(f"{where}: 'command' is a text or a list of texts")
             if "deploy" in svc and not (isinstance(svc["deploy"], dict) and _plain(svc["deploy"], 3)):
@@ -357,6 +454,13 @@ def check_slots(slots, err, warn):
                 err.append(f"slot {name}: a secret's source is 'generate' or 'ask'")
             if src == "generate" and not 16 <= s.get("length", 0) <= 128:
                 err.append(f"slot {name}: a generated secret needs a length of 16–128")
+        if "kind" in s and not (t == "secret" and s.get("source") == "ask" and s["kind"] in SECRET_KINDS):
+            err.append(f"slot {name}: 'kind: password' is only for a secret you type in (source: ask) — a password you "
+                       "choose yourself, not a key from another service")
+        if "shape" in s and not (t == "secret" and s.get("source") == "ask" and isinstance(s["shape"], str)
+                                and s["shape"] in SHAPES):
+            err.append(f"slot {name}: 'shape' is only for a secret you type in (source: ask), and is one of: "
+                       + ", ".join(SHAPES))
         if t == "choice":
             opts = s.get("options") or []
             if s.get("default") not in (list(opts) if isinstance(opts, dict) else opts):
@@ -369,7 +473,7 @@ def check_slots(slots, err, warn):
             for side in ("on", "off"):
                 for m in SLOT.finditer(str(s.get(side, ""))):
                     ref = slots.get(m.group(1), {})
-                    if ref.get("type") in (None, "secret", "toggle"):
+                    if ref.get("type") in (None, "secret", "toggle") or isinstance(ref.get("asked_if"), dict):
                         err.append(f"slot {name}: its '{side}' value may only use other plain gaps, not {m.group(1)!r}")
         elif "on" in s or "off" in s:
             err.append(f"slot {name}: only a toggle has 'on' and 'off'")
@@ -389,8 +493,19 @@ def check_slots(slots, err, warn):
             bad = sorted(k for k in ("sub", "default", "asked_if", "advanced") if k in s)
             if bad:
                 err.append(f"slot {name}: a folder of yours is always asked, with no {', '.join(bad)}")
-        if "asked_if" in s and slots.get(s["asked_if"], {}).get("type") != "toggle":
+        a = s.get("asked_if")
+        if isinstance(a, str) and slots.get(a, {}).get("type") != "toggle":
             err.append(f"slot {name}: 'asked_if' must name a toggle")
+        elif isinstance(a, dict):                         # 0.9.6: asked only for some answers of a choice
+            c, vals = asked_by(a)
+            ref = slots.get(c, {})
+            if ref.get("type") != "choice" or "asked_if" in ref or not all(isinstance(x, str) for x in choice_values(ref)):
+                err.append(f"slot {name}: 'asked_if' names {c!r}: not a choice that is always asked (with text values)")
+            elif set(vals) - set(choice_values(ref)):
+                err.append(f"slot {name}: 'asked_if' lists answers {c!r} doesn't have: {sorted(set(vals) - set(choice_values(ref)))}")
+            if t not in IN_VALUE or (t == "secret" and s.get("source") != "ask"):
+                err.append(f"slot {name}: only a secret you paste, a text, an address or a choice can be asked for some "
+                           "answers of a choice (it goes inside a value with gaps)")
 
 
 def shape_2(r):
@@ -415,16 +530,30 @@ def shape_2(r):
     return e
 
 
+def always(slots, a, among):
+    """Whether something asked under `a` is there for every answer: no asked_if, or (0.9.6) a choice whose every
+    answer asks one of `among` (the asked_ifs of the same kind of thing)."""
+    if a is None:
+        return True
+    if isinstance(a, str):
+        return False
+    ch = asked_by(a)[0]
+    got = {v for x in among if isinstance(x, dict) and asked_by(x)[0] == ch for v in asked_by(x)[1]}
+    return got >= set(choice_values(slots[ch]))
+
+
 def facts(r):
     """The Store's filter facts, worked out from a passed recipe (format 1 or 2) — most from what it already says, so
     they can't drift from it. Format 1 has only its free-text category: it goes under 'other'."""
     checked(r)
     v2, slots, n = r["schema"] == 2, r["slots"], r.get("needs") or {}
-    asks = [s for s in slots.values() if s["type"] == "secret" and s.get("source") == "ask"]
+    asks = [s for s in slots.values() if s["type"] == "secret" and s.get("source") == "ask"
+            and s.get("kind") != "password"]       # a password you choose isn't a key from another service (0.9.6)
     return {"categories": ([r["category"]] + r.get("also", [])) if v2 else ["other"],
             "pi": "linux/arm64" in (n.get("platforms") or []),
             "memory_mb": n.get("memory_mb"),
-            "own_key": "needed" if any("asked_if" not in s for s in asks) else "optional" if asks else "no",
+            "own_key": "needed" if any(always(slots, s.get("asked_if"), [x.get("asked_if") for x in asks]) for s in asks)
+                       else "optional" if asks else "no",
             "your_folders": any(s["type"] == "folder" and s.get("suggest") == "yours" for s in slots.values()),
             "extra_access": bool(n.get("elevated")),
             "licence": r.get("licence"), "open_source": r.get("licence") in OPEN_SOURCE,
@@ -452,6 +581,10 @@ def _check(r, repo_id):
     for name, s in slots.items():
         if s.get("type") == "secret" and "asked_if" in s and r["schema"] != 2:
             err.append(f"slot {name}: a secret asked only when a switch is on needs format 2 (schema: 2)")
+        if "kind" in s and r["schema"] != 2:
+            err.append(f"slot {name}: 'kind' needs format 2 (schema: 2)")
+        if isinstance(s.get("asked_if"), dict) and r["schema"] != 2:
+            err.append(f"slot {name}: a gap asked for some answers of a choice needs format 2 (schema: 2)")
     elevated = (r.get("needs") or {}).get("elevated") or {}
     for e, why in elevated.items():
         if e not in ELEVATED:
@@ -465,7 +598,8 @@ def _check(r, repo_id):
     services = r["compose"]["services"]
     if set(r["compose"]) - {"services"}:
         err.append(f"compose: only 'services' is allowed (found {sorted(map(str, set(r['compose']) - {'services'}))})")
-    used = {s["under"] for s in slots.values() if "under" in s} | {s["asked_if"] for s in slots.values() if "asked_if" in s}
+    used = {s["under"] for s in slots.values() if "under" in s} | {
+        a if isinstance(a, str) else asked_by(a)[0] for a in (s.get("asked_if") for s in slots.values()) if a}
     in_toggles = set()
     for s in slots.values():
         if s.get("type") == "toggle":
@@ -475,7 +609,11 @@ def _check(r, repo_id):
     yours = {n for n, s in slots.items() if s.get("type") == "folder" and s.get("suggest") == "yours"}
     if len(yours) > YOURS_MAX:
         err.append(f"at most {YOURS_MAX} folders of yours per app ({len(yours)} declared)")
+    inside = tuple(f".services.{sn}.environment.{k}." for sn, k, _ in entries(r["compose"]))
+    check_entries(r, slots, err, used)
     for path, text in walk(r["compose"]):
+        if path.startswith(inside or ("\0",)):
+            continue                                   # a value with gaps inside: check_entries' rules
         for m in SLOT.finditer(text):
             base, attr = m.groups(); used.add(base)
             if base in yours and not re.match(r"^\.services\.[^.\[]+\.volumes\[[0-9]+\]$", path):
@@ -484,13 +622,16 @@ def _check(r, repo_id):
                 err.append(f"{path}: '{{{{{base}}}}}' isn't declared: refused")
             elif attr and not (slots[base]["type"] == "user" and attr in ("uid", "gid")):
                 err.append(f"{path}: '.{attr}' isn't allowed on a {slots[base]['type']}")
+            elif isinstance(slots[base].get("asked_if"), dict):
+                err.append(f"{path}: '{{{{{base}}}}}' is only asked for some answers of {asked_by(slots[base]['asked_if'])[0]!r}: "
+                           "use it inside a value split by that choice (inside, by, cases)")
             elif slots[base]["type"] == "secret" and not (".environment." in path and WHOLE.match(text)):
                 err.append(f"{path}: a secret may only be a whole environment value (so it can go to .env)")
             elif "asked_if" in slots[base] and slots[base]["type"] != "secret":
                 err.append(f"{path}: '{{{{{base}}}}}' is only asked when a switch is on: use it inside that switch's 'on' value")
     for path, text in walk(r.get("tips", []) + [h.get("text", "") for h in r.get("host_steps", [])]):
         for m in SLOT.finditer(text):
-            if slots.get(m.group(1), {}).get("type") in (None, "secret"):
+            if slots.get(m.group(1), {}).get("type") in (None, "secret") or isinstance(slots[m.group(1)].get("asked_if"), dict):
                 err.append(f"tips/host_steps: '{{{{{m.group(1)}}}}}' isn't a gap they may show")
     for h in r.get("host_steps", []):
         for t in h.get("if_on", []):
@@ -563,6 +704,95 @@ def _check(r, repo_id):
     return err, warn
 
 
+def check_entries(r, slots, err, used):
+    """0.9.6, format 2: environment values with gaps inside (secret-in-value-design.md, draft 3). The whole value goes to
+    .env through the gate as one secret; the compose file only gets ${NAME}."""
+    taken = {n.upper() for n, s in slots.items() if s.get("type") == "secret"}
+    seen, went = set(), set()                         # went: (gap, choice, answer) — where a choice's own questions go
+    for sname, k, e in entries(r["compose"]):
+        where = f"{sname}.environment.{k}"
+        if r["schema"] != 2:
+            err.append(f"{where}: a value with gaps inside needs format 2 (schema: 2)"); continue
+        if not GATE_SECRET.match(k):
+            err.append(f"{where}: its name goes to .env: capitals, digits and _, starting with a capital, at most 41")
+        if k in seen or k in taken:
+            err.append(f"{where}: another value or a secret already goes to .env as {k}")
+        seen.add(k)
+        by = e.get("by")
+        if by is not None:
+            c = slots.get(by, {})
+            if c.get("type") != "choice" or "asked_if" in c or not all(isinstance(x, str) for x in choice_values(c)):
+                err.append(f"{where}: 'by' names {by!r}: not a choice that is always asked (with text values)"); continue
+            used.add(by)
+            want, have = set(choice_values(c)), set(e["cases"])
+            if want != have:
+                err.append(f"{where}: one case per answer of {by!r}"
+                           + (f"; missing: {sorted(want - have)}" if want - have else "")
+                           + (f"; not one of its answers: {sorted(have - want)}" if have - want else ""))
+                continue
+        for case, text in templates(e):
+            w = where + (f".cases.{case}" if case is not None else ".value")
+            if not text.isprintable() or "$" in text:
+                err.append(f"{w}: one line, without $ or other characters the machine refuses")
+            if " #" in text or text != text.strip():
+                err.append(f"{w}: Docker Compose would cut it short (a ' #', or a space at the start or end)")
+            if text[:1] in ("\"", "'", "`"):
+                err.append(f"{w}: it may not start with a quote mark: Docker Compose would read it as quoting")
+            if len(SLOT.sub("", text)) > VALUE_MAX:
+                err.append(f"{w}: already longer than {VALUE_MAX} characters before any answer goes in")
+            gaps, secret = [], False
+            for m in SLOT.finditer(text):
+                base, attr = m.groups(); used.add(base); gaps.append(base)
+                g = slots.get(base)
+                if g is None:
+                    err.append(f"{w}: '{{{{{base}}}}}' isn't declared: refused"); continue
+                if attr:
+                    err.append(f"{w}: '.{attr}' can't go inside a value"); continue
+                t, a = g["type"], g.get("asked_if")
+                if t not in IN_VALUE or (t == "secret" and g.get("source") != "ask"):
+                    err.append(f"{w}: '{{{{{base}}}}}' is a {t}{' made for the app' if t == 'secret' else ''}: only a "
+                               "secret you paste, a text, an address or a choice can go inside a value")
+                elif isinstance(a, str):
+                    err.append(f"{w}: '{{{{{base}}}}}' is only asked when a switch is on: it can't go inside a value")
+                elif isinstance(a, dict):
+                    ch, vals = asked_by(a)
+                    if ch != by:
+                        err.append(f"{w}: '{{{{{base}}}}}' is only asked for some answers of {ch!r}: use it in a value "
+                                   f"split by that choice (by: {ch})")
+                    elif case not in vals:
+                        err.append(f"{w}: '{{{{{base}}}}}' isn't asked when {ch!r} is {case!r}")
+                    else:
+                        went.add((base, ch, case))
+                secret = secret or (t == "secret" and g.get("source") == "ask")
+            if not secret:
+                err.append(f"{w}: holds no secret you paste: write it as a plain value")
+            if e["inside"] == "json":                 # valid JSON once filled, each gap inside a string value
+                marks = [f"zq{i}gapzq" for i in range(len(gaps))]
+                it = iter(marks)
+                try:
+                    doc = json.loads(SLOT.sub(lambda m: next(it), text))
+                except ValueError:
+                    err.append(f"{w}: isn't valid JSON (inside: json)"); continue
+                strings = []
+                def values(x):
+                    if isinstance(x, dict):
+                        for v in x.values(): values(v)
+                    elif isinstance(x, list):
+                        for v in x: values(v)
+                    elif isinstance(x, str):
+                        strings.append(x)
+                values(doc)
+                if sum(v.count(mk) for v in strings for mk in marks) != len(marks):
+                    err.append(f"{w}: each gap must sit inside a JSON text value, between quotes (inside: json)")
+    for n, g in slots.items():                        # each question a choice asks is used whenever it's asked
+        a = g.get("asked_if")
+        if isinstance(a, dict) and n in used:
+            ch, vals = asked_by(a)
+            idle = [v for v in vals if (n, ch, v) not in went]
+            if idle:
+                err.append(f"slot {n}: asked when {ch!r} is {idle}, but no value uses it then")
+
+
 def checked(r, repo_id=None):
     """The recipe if it passes, else Refused with every reason (fill and permissions only work on a passed recipe)."""
     err, _ = check(r, repo_id)
@@ -583,7 +813,9 @@ def valid(slot, value):
     if t == "number":
         return _int(value, -10**9, 10**9)
     if t == "secret" and slot.get("source") == "ask":            # the gate takes 8–512 (gate 1.5): refused here first
-        return isinstance(value, str) and 8 <= len(value) < 200 and not UNSAFE.search(value) and " " not in value.strip()
+        if not (isinstance(value, str) and 8 <= len(value) < 200 and not UNSAFE.search(value) and " " not in value.strip()):
+            return False
+        return slot.get("shape") not in SHAPES or bool(SHAPES[slot["shape"]][0].fullmatch(value))
     if t in ("text", "url", "timezone"):
         return isinstance(value, str) and 0 < len(value) < 200 and not UNSAFE.search(value) and " " not in value.strip()
     if t == "choice":
@@ -600,6 +832,43 @@ def valid(slot, value):
     if t == "user":
         return isinstance(value, dict) and set(value) == {"uid", "gid"} and all(_int(value[k], 0, 1 << 31) for k in ("uid", "gid"))
     return False                        # a type this code doesn't know never gets an answer through
+
+
+CHARS = "no spaces, line breaks or the characters { } $ `"
+
+
+def rule(slot):
+    """What an answer for this gap must look like, in words: shown when one is refused, instead of the answer."""
+    t = slot.get("type")
+    if t == "folder":
+        return "a full path starting with /, under 300 characters, without '..', no line breaks or the characters { } $ `"
+    if t == "port":
+        return "a whole number from 1024 to 65535"
+    if t == "number":
+        return "a whole number"
+    if t == "secret" and slot.get("shape") in SHAPES:
+        return SHAPES[slot["shape"]][1]
+    if t == "secret":
+        return f"8 to 199 characters, {CHARS}"
+    if t in ("text", "url", "timezone"):
+        return f"1 to 199 characters, {CHARS}"
+    if t == "choice":
+        o = slot.get("options") or []
+        return "one of: " + ", ".join(str(x) for x in (o if isinstance(o, list) else list(o)))[:200]
+    if t == "toggle":
+        return "on or off"
+    if t == "networks":
+        return "1 to 10 private address ranges, like 10.0.0.0/24"
+    if t == "user":
+        return "a user number and a group number"
+    return "a kind of answer this updater doesn't know"
+
+
+def refusal(name, slot):
+    """The message for a refused answer: the gap, its question and the rule. Never what was typed (a key, maybe)."""
+    q = str(slot.get("question", "")).strip()[:120]
+    return (f"answer for {name} refused" + (f" (“{q}”)" if q else "") + f": it must be {rule(slot)}. "
+            "What was typed isn't shown")
 
 
 LEFT_OUT = object()                     # a secret whose switch is off: its environment entry isn't written at all
@@ -628,11 +897,11 @@ def _fill(r, answers, rng, for_gate):
     def answer(name, s, default):
         v = answers.get(name, default)
         if not valid(s, v):
-            raise Refused(f"answer for {name} refused: {str(v)[:60]!r}")
+            raise Refused(refusal(name, s))     # never the answer itself: it may be a pasted key (0.9.6)
         return v
 
     for name, s in slots.items():           # plain gaps first; folders under a main folder and toggles after
-        if s["type"] == "secret" and "asked_if" in s and not answers.get(s["asked_if"], slots[s["asked_if"]]["default"]):
+        if s["type"] == "secret" and not is_asked(slots, s, answers):
             vals[name] = None; continue     # format 2: its switch is off → its environment entry is left out
         if s["type"] == "secret" and s.get("source", "generate") == "generate":
             vals[name] = {"generate": s["length"]} if for_gate else \
@@ -640,7 +909,7 @@ def _fill(r, answers, rng, for_gate):
             continue
         if "under" in s or s["type"] == "toggle":
             continue
-        if "asked_if" in s and not answers.get(s["asked_if"], slots[s["asked_if"]]["default"]):
+        if not is_asked(slots, s, answers):    # a switch that's off, or (0.9.6) an answer of a choice it isn't for
             vals[name] = None; continue
         v = answer(name, s, s.get("default"))
         if s["type"] == "choice" and isinstance(s["options"], dict):
@@ -665,9 +934,37 @@ def _fill(r, answers, rng, for_gate):
         return " ".join(SLOT.sub(lambda m: str(vals[m.group(1)][m.group(2)] if m.group(2) else vals[m.group(1)]), text).split()) \
             if SLOT.search(text) else text
 
-    def rebuild(node):
+    def fill_entry(k, e):
+        """A value with gaps inside (0.9.6): each answer written in its way, the whole value to .env as one secret."""
+        text = e["value"] if "value" in e else e["cases"][vals[e["by"]]]
+        put = {}
+        def gap(m):
+            put[m.group(1)] = ENCODE[e["inside"]](str(vals[m.group(1)]))
+            return put[m.group(1)]
+        out = SLOT.sub(gap, text)
+        why = value_problem(out)
+        if why:
+            q = lambda n: f"“{str(slots[n].get('question', n)).strip()[:80]}”"
+            if len(out) > VALUE_MAX:
+                top = sorted(put, key=lambda n: -len(put[n]))[:2]
+                who = "; the longest answers: " + ", ".join(f"{q(n)} ({len(put[n])} characters once written in)" for n in top)
+            else:
+                odd = [n for n, x in put.items() if not x.isprintable() or x != x.strip() or "#" in x or "$" in x
+                       or x[:1] in ("\"", "'", "`")]
+                who = ("; check: " + ", ".join(q(n) for n in odd)) if odd else ""
+            raise Refused(f"{k} {why}{who}. What was typed isn't shown")
+        env[k] = {"value": out} if for_gate else out
+        return "${" + k + "}"
+
+    def rebuild(node, at=()):
         if isinstance(node, dict):
-            return {k: v for k, v in ((k, rebuild(v)) for k, v in node.items()) if v is not LEFT_OUT}
+            here = len(at) == 3 and at[0] == "services" and at[2] == "environment"
+            out = {}
+            for k, v in node.items():
+                v = fill_entry(k, v) if here and isinstance(v, dict) else rebuild(v, at + (k,))
+                if v is not LEFT_OUT:
+                    out[k] = v
+            return out
         if isinstance(node, list):
             return [rebuild(v) for v in node]
         return sub(node) if isinstance(node, str) else node
@@ -718,10 +1015,15 @@ def permissions(r):
     out.append(("internet", "it can reach the internet (every app can, unless it's cut off)", "always"))
     for e in ((r.get("needs") or {}).get("elevated") or {}):
         out.append(("extra", ELEVATED_WORDS[e], "always"))
+    said = {}
     for s in slots.values():
         if s["type"] == "secret":
-            out.append(("secret", "a password or key you paste in (kept in .env, never shown)" if s.get("source") == "ask"
-                        else "passwords made for it (kept in .env, never shown)", s.get("asked_if", "always")))
+            said.setdefault("a password you choose (kept in .env, never shown)" if s.get("kind") == "password"
+                            else "a password or key you paste in (kept in .env, never shown)" if s.get("source") == "ask"
+                            else "passwords made for it (kept in .env, never shown)", []).append(s.get("asked_if"))
+    for what, ifs in said.items():          # when = "always", a switch's name, or (0.9.6) the choice it depends on
+        for a in ifs:
+            out.append(("secret", what, "always" if always(slots, a, ifs) else a if isinstance(a, str) else asked_by(a)[0]))
     out = list(dict.fromkeys(out))
     out.append(("outside", "nothing from outside home: making it reachable from outside is a separate step, by hand", "always"))
     return out

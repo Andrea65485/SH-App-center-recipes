@@ -26,7 +26,7 @@ def store_line(r):
     f = rc.facts(r)
     if r["schema"] != 2:
         return "format 1: a Store lists it under Other, without licence or internet level (schema: 2 adds them)"
-    key = {"needed": "needed", "optional": "only behind a switch", "no": "not needed"}[f["own_key"]]
+    key = {"needed": "needed", "optional": "only for some answers: a feature you switch on, or one of the choices", "no": "not needed"}[f["own_key"]]
     return (f"format 2: {', '.join(rc.CATEGORIES[c] for c in f['categories'])} · licence {f['licence']} ("
             + ("open source" if f["open_source"] else "not an open-source licence") + f") · internet {f['internet']} · "
             f"a key of yours {key} · " + ("runs on arm64" if f["pi"] else "not on arm64"))
