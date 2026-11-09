@@ -1,0 +1,257 @@
+# DDNS updater — keeps your home's name in your DNS provider pointing at your current public address.
+# Recipe (9 Nov 2026): 16 DNS providers. It uses three additions first accepted by updater 0.9.6 and store-watch 1.2.1
+# (older ones leave it out of the Store): `value` + `inside` on an environment entry, a value chosen `by` a choice
+# (`cases`), and `asked_if` naming a choice's values. Only Infomaniak can be tried with a real account (the owner's);
+# the others are read from ddns-updater's docs/<provider>.md at v2.10.0. Answers with " \ ' # @ : reach the app
+# unchanged (tried 9 Nov on Docker Compose v2.32.4 and v5.6.0, with made-up values, the app never started).
+# Facts read from ddns-updater's own files at the v2.10.0 tag (README, docs/infomaniak.md, Dockerfile; 8 Nov), as data:
+# - settings: either data/config.json or the CONFIG environment variable, one line of JSON, which wins over the file;
+# - per provider (docs/<provider>.md): its own fields; all take domain, most ip_version (ipv4 | ipv6 | "ipv4 or ipv6",
+#   default the last) and ipv6_suffix (left out here). Namecheap: IPv4 only, no ip_version. Cloudflare: ttl is a number
+#   (fixed 1 = automatic here, so no gap sits outside a JSON string); its token is an API token with DNS edit rights;
+# - image: FROM scratch, USER 1000:1000 (a build setting), status page on 8000 (LISTENING_ADDRESS :8000), its own
+#   health check every 60 s; writes updates.json (the address history) into /updater/data (DATADIR); PERIOD 5m;
+# - licence: MIT, (c) 2019 Quentin McGaw.
+# Docker Hub, 8 Nov: qmcgaw/ddns-updater:v2.10.0 = sha256:3e2aa558946b5a293def4d73008fa4651c072b2c12932cecd02126fb23979831
+schema: 2
+id: sh-app-centre.ddns-updater
+name: DDNS updater
+summary: Keeps your home's name pointing at your home, even when your internet provider changes its address. Works with 16 DNS providers.
+category: network
+licence: MIT
+use_from: [browser]
+version: "2.10.0"
+links: {home: "https://github.com/qdm12/ddns-updater", notes: "https://github.com/qdm12/ddns-updater/releases"}
+needs:
+  platforms: [linux/amd64, linux/arm64]
+  memory_mb: 64
+  internet: {level: needed, why: "Every 5 minutes it asks a public service what your home's address is, and tells your DNS provider when it changes."}
+
+slots:
+  provider:
+    type: choice
+    options:
+      "Cloudflare": "cloudflare"
+      "DigitalOcean": "digitalocean"
+      "deSEC (free)": "desec"
+      "DuckDNS (free)": "duckdns"
+      "Dynu": "dynu"
+      "dynv6 (free)": "dynv6"
+      "FreeDNS (afraid.org)": "freedns"
+      "Gandi": "gandi"
+      "Hetzner (DNS in the Cloud Console)": "hetznercloud"
+      "Hurricane Electric (dns.he.net)": "he"
+      "Infomaniak": "infomaniak"
+      "IONOS": "ionos"
+      "Namecheap (IPv4 only)": "namecheap"
+      "No-IP": "noip"
+      "Porkbun": "porkbun"
+      "Strato": "strato"
+    default: "Cloudflare"
+    question: "Who looks after your domain's names (DNS)"
+    help: "Usually where you bought the domain, or the service you moved its DNS to. Only that one's questions are asked below."
+  domain:
+    type: text
+    question: "The name to keep pointing at home"
+    help: "The whole name, for example home.example.com. With DuckDNS it ends in .duckdns.org."
+  cloudflare_zone:
+    type: text
+    asked_if: {provider: ["cloudflare"]}
+    question: "Its Cloudflare zone ID"
+    help: "On your domain's Overview page in Cloudflare, written as Zone ID."
+  cloudflare_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["cloudflare"]}
+    question: "Its Cloudflare token"
+    help: "Make one in Cloudflare (My Profile, API Tokens) that may edit the DNS of this domain only. Not the Global API Key."
+  digitalocean_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["digitalocean"]}
+    question: "Its DigitalOcean token"
+    help: "Made in DigitalOcean's control panel (API, Tokens), allowed to change this domain's DNS."
+  desec_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["desec"]}
+    question: "Its deSEC token"
+    help: "Made at desec.io, on its Tokens page."
+  duckdns_token:
+    type: secret
+    source: ask
+    shape: uuid
+    asked_if: {provider: ["duckdns"]}
+    question: "Its DuckDNS token"
+    help: "Shown on your page at duckdns.org once you've signed in: 36 characters with four dashes, like 1a2b3c4d-…"
+  dynu_user:
+    type: secret
+    source: ask
+    asked_if: {provider: ["dynu"]}
+    question: "Its Dynu user name"
+    help: "The one you sign in to Dynu with."
+  dynu_pass:
+    type: secret
+    source: ask
+    asked_if: {provider: ["dynu"]}
+    question: "Its Dynu password"
+    help: "Your Dynu password, or better a separate one made in Dynu for address updates only."
+  dynv6_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["dynv6"]}
+    question: "Its dynv6 token"
+    help: "Made at dynv6.com, on its Keys page (HTTP Tokens)."
+  freedns_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["freedns"]}
+    question: "Its FreeDNS token"
+    help: "Switch on dynamic DNS for the name at freedns.afraid.org/dynamic/v2. It shows a link like sync.afraid.org/u/TOKEN/: paste only the TOKEN part."
+  gandi_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["gandi"]}
+    question: "Its Gandi personal access token"
+    help: "Made in your Gandi account settings, allowed to manage this domain's DNS."
+  hetzner_token:
+    type: secret
+    source: ask
+    asked_if: {provider: ["hetznercloud"]}
+    question: "Its Hetzner token"
+    help: "Made in the Hetzner Cloud Console (Security, API tokens) with read and write access."
+  henet_pass:
+    type: secret
+    source: ask
+    asked_if: {provider: ["he"]}
+    question: "Its dynamic DNS key (Hurricane Electric)"
+    help: "Made at dns.he.net for this name, when you allow it to be updated. Not your account password."
+  infomaniak_user:
+    type: secret
+    source: ask
+    asked_if: {provider: ["infomaniak"]}
+    question: "Its DynDNS user name (Infomaniak)"
+    help: "Made in Infomaniak's DynDNS page for this name. Not the name you sign in to Infomaniak with."
+  infomaniak_pass:
+    type: secret
+    source: ask
+    asked_if: {provider: ["infomaniak"]}
+    question: "Its DynDNS password (Infomaniak)"
+    help: "Made with the user name above. Not your Infomaniak password: if this one leaks, it can only move this name."
+  ionos_key:
+    type: secret
+    source: ask
+    asked_if: {provider: ["ionos"]}
+    question: "Its IONOS key"
+    help: "Made in IONOS for dynamic DNS. It looks like two parts joined by a dot (prefix.key): paste both."
+  namecheap_pass:
+    type: secret
+    source: ask
+    shape: hex32
+    asked_if: {provider: ["namecheap"]}
+    question: "Its Dynamic DNS password (Namecheap)"
+    help: "In Namecheap: the domain's Advanced DNS page, switch on Dynamic DNS, and the password appears (32 digits and letters). Not your account password."
+  noip_user:
+    type: secret
+    source: ask
+    asked_if: {provider: ["noip"]}
+    question: "Its No-IP user name"
+    help: "Your No-IP user name, or better the user name of a separate update account made in No-IP for this name."
+  noip_pass:
+    type: secret
+    source: ask
+    asked_if: {provider: ["noip"]}
+    question: "Its No-IP password"
+    help: "The password that goes with the user name above."
+  porkbun_key:
+    type: secret
+    source: ask
+    asked_if: {provider: ["porkbun"]}
+    question: "Its Porkbun API key"
+    help: "Made at porkbun.com/account/api. Also switch on API access for this domain on Porkbun's Domain Management page."
+  porkbun_secret:
+    type: secret
+    source: ask
+    asked_if: {provider: ["porkbun"]}
+    question: "Its Porkbun secret key"
+    help: "Shown once, with the key above."
+  strato_pass:
+    type: secret
+    source: ask
+    asked_if: {provider: ["strato"]}
+    question: "Its DynDNS password (Strato)"
+    help: "Set in Strato's domain settings when you switch DynDNS on for the domain."
+  ip_version:
+    type: choice
+    options: {"IPv4 only (most homes)": "ipv4", "IPv6 only": "ipv6", "Whichever it finds": "ipv4 or ipv6"}
+    default: "IPv4 only (most homes)"
+    advanced: true
+    asked_if: {provider: ["cloudflare", "digitalocean", "desec", "duckdns", "dynu", "dynv6", "freedns", "gandi", "hetznercloud", "he", "infomaniak", "ionos", "noip", "porkbun", "strato"]}
+    question: "Which kind of address to keep up to date"
+    help: "IPv4 is the usual kind (like 203.0.113.7). Choose IPv6 only if your provider gives your home one and you use it."
+  data:
+    type: folder
+    suggest: app-folder
+    question: "Where it keeps its history"
+    help: "A small file listing your home's addresses and when they changed."
+  status:
+    type: port
+    suggest: free-port
+    default: 8000
+    question: "The address of its status page, at home"
+    help: "A page showing the name, your current address and when it last checked. Home network only."
+  me:
+    type: user
+    suggest: host
+    advanced: true
+    question: "Which account it runs as"
+    help: "Your own account, so it can write its history file and nothing else."
+
+pictures:   # no screenshots yet (its status page would show the home name and address)
+  icon: {file: icon.png, source: project, from: "https://github.com/qdm12/ddns-updater/blob/v2.10.0/internal/server/ui/static/favicon.svg",
+         licence: "MIT, © 2019 Quentin McGaw; Go gopher design by Renée French, CC BY 4.0 (drawn as a 256-px PNG)"}
+tips:
+  - "Its status page: this machine's address, then :{{status}}. After a minute it should say Up to date, with today's address."
+  - "If it says it can't sign in or update the name, check the key you pasted, and that it may change this domain's DNS (not your account password)."
+  - "With Namecheap only IPv4 addresses are kept up to date."
+  - "Changing the name or the login later: install again with the new answers (its history stays)."
+
+compose:
+  services:
+    ddns-updater:
+      image: qmcgaw/ddns-updater:v2.10.0
+      user: "{{me.uid}}:{{me.gid}}"
+      ports: ["{{status}}:8000"]
+      volumes: ["{{data}}:/updater/data"]
+      environment:
+        CONFIG:                                 # PROPOSED (secret-in-value-design.md, draft 3)
+          inside: json
+          by: provider
+          cases:
+            "cloudflare": '{"settings":[{"provider":"cloudflare","zone_identifier":"{{cloudflare_zone}}","domain":"{{domain}}","ttl":1,"token":"{{cloudflare_token}}","ip_version":"{{ip_version}}"}]}'
+            "digitalocean": '{"settings":[{"provider":"digitalocean","domain":"{{domain}}","token":"{{digitalocean_token}}","ip_version":"{{ip_version}}"}]}'
+            "desec": '{"settings":[{"provider":"desec","domain":"{{domain}}","token":"{{desec_token}}","ip_version":"{{ip_version}}"}]}'
+            "duckdns": '{"settings":[{"provider":"duckdns","domain":"{{domain}}","token":"{{duckdns_token}}","ip_version":"{{ip_version}}"}]}'
+            "dynu": '{"settings":[{"provider":"dynu","domain":"{{domain}}","username":"{{dynu_user}}","password":"{{dynu_pass}}","ip_version":"{{ip_version}}"}]}'
+            "dynv6": '{"settings":[{"provider":"dynv6","domain":"{{domain}}","token":"{{dynv6_token}}","ip_version":"{{ip_version}}"}]}'
+            "freedns": '{"settings":[{"provider":"freedns","domain":"{{domain}}","token":"{{freedns_token}}","ip_version":"{{ip_version}}"}]}'
+            "gandi": '{"settings":[{"provider":"gandi","domain":"{{domain}}","personal_access_token":"{{gandi_token}}","ip_version":"{{ip_version}}"}]}'
+            "hetznercloud": '{"settings":[{"provider":"hetznercloud","domain":"{{domain}}","token":"{{hetzner_token}}","ip_version":"{{ip_version}}"}]}'
+            "he": '{"settings":[{"provider":"he","domain":"{{domain}}","password":"{{henet_pass}}","ip_version":"{{ip_version}}"}]}'
+            "infomaniak": '{"settings":[{"provider":"infomaniak","domain":"{{domain}}","username":"{{infomaniak_user}}","password":"{{infomaniak_pass}}","ip_version":"{{ip_version}}"}]}'
+            "ionos": '{"settings":[{"provider":"ionos","domain":"{{domain}}","api_key":"{{ionos_key}}","ip_version":"{{ip_version}}"}]}'
+            "namecheap": '{"settings":[{"provider":"namecheap","domain":"{{domain}}","password":"{{namecheap_pass}}"}]}'
+            "noip": '{"settings":[{"provider":"noip","domain":"{{domain}}","username":"{{noip_user}}","password":"{{noip_pass}}","ip_version":"{{ip_version}}"}]}'
+            "porkbun": '{"settings":[{"provider":"porkbun","domain":"{{domain}}","api_key":"{{porkbun_key}}","secret_api_key":"{{porkbun_secret}}","ip_version":"{{ip_version}}"}]}'
+            "strato": '{"settings":[{"provider":"strato","domain":"{{domain}}","password":"{{strato_pass}}","ip_version":"{{ip_version}}"}]}'
+        CONFIG_FILEPATH: "/dev/null"            # it writes CONFIG out to this file (644, overwritten each start): not into its folder
+        LISTENING_ADDRESS: ":8000"
+        PERIOD: "5m"
+      restart: unless-stopped
+      deploy: {resources: {limits: {memory: 128m}}}
+
+update:
+  main: ddns-updater
+  tags: '^v\d+\.\d+\.\d+$'
+  health: {check: container-health, service: ddns-updater, wait: 180}   # the image's own check, every 60 s
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image}     # its history is one small file
