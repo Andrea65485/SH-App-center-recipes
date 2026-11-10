@@ -563,6 +563,8 @@ def facts(r):
 
 def check(r, repo_id=None):
     """(errors, notes) for one recipe (a parsed mapping). Errors = refused; notes = shown to the author only."""
+    if isinstance(r, dict) and r.get("schema") == UPDATE_ONLY_SCHEMA:     # 0.9.8: update rules only, no install
+        return check_update_only(r, repo_id), []
     err = shape(r)
     if err:
         return err, []
@@ -791,6 +793,105 @@ def check_entries(r, slots, err, used):
             idle = [v for v in vals if (n, ch, v) not in went]
             if idle:
                 err.append(f"slot {n}: asked when {ch!r} is {idle}, but no value uses it then")
+
+
+# ---- format 3 (0.9.8, owner 9 Nov): update rules for an app installed by hand ("installed by hand · matched").
+# No compose, no gaps, no install: only which images it is for, and the update rules in the same words the updater's
+# own built-in recipes use (local-recipes/*/recipe.yaml), checked by the same code below. The machine, project, service
+# and container never come from here: they stay in the updater's own bindings.
+UPDATE_ONLY_SCHEMA = 3
+UPDATE_ONLY_KEYS = {"schema", "id", "name", "summary", "kind", "match", "update"}
+UPDATE_ONLY_OPTIONAL = {"links", "pictures", "category"}
+IMAGE_NAME = re.compile(r"^(?:[a-z0-9][a-z0-9-]{0,40}(?:\.[a-z0-9][a-z0-9-]{0,40}){1,4}(?::[0-9]{2,5})?/)?"   # a registry host: dotted
+                        r"[a-z0-9]{1,30}(?:(?:[._]|__|-+)[a-z0-9]{1,30}){0,8}(?:/[a-z0-9]{1,30}(?:(?:[._]|__|-+)[a-z0-9]{1,30}){0,8}){0,3}$")
+U_VERSION = {"compare", "show-only"}
+U_HEALTH = {"none", "app-status", "ok-detail"}   # app-status: Nextcloud's occ status; ok-detail: the gate's {"ok", "detail"}
+U_DUMPS = {"none", "postgres"}
+U_ROLLBACK = {"image", "none"}
+U_KEYS = {"wait", "version", "site", "health", "major"}
+U_OPTIONAL = {"busy", "data_copy"}
+U_BUSY = {"none", "check"}
+U_DATA_COPY = {"none", "every", "major"}
+U_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def update_only(r):
+    """True for a format-3 recipe: update rules for an app installed by hand (never installable)."""
+    return isinstance(r, dict) and r.get("schema") == UPDATE_ONLY_SCHEMA
+
+
+def _seconds(v, lo, hi):
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def check_update_block(u):
+    """Problems with an update block in the built-in recipes' words (empty = fine): wait, version, site, health, major,
+    and optional busy / data_copy. The same rules for a built-in recipe and a format-3 one from a repository."""
+    bad = []
+    if not isinstance(u, dict) or not U_KEYS <= set(u) <= U_KEYS | U_OPTIONAL:
+        return [f"update must have {sorted(U_KEYS)}, and may have {sorted(U_OPTIONAL)}"]
+    if u.get("busy", "none") not in U_BUSY:
+        bad.append(f"update.busy: one of {sorted(U_BUSY)}")
+    if u.get("data_copy", "none") not in U_DATA_COPY:
+        bad.append(f"update.data_copy: one of {sorted(U_DATA_COPY)}")
+    if not _seconds(u["wait"], 10, 900):
+        bad.append("update.wait: 10–900 seconds")
+    if u["version"] not in U_VERSION:
+        bad.append(f"update.version: one of {sorted(U_VERSION)}")
+    s = u["site"]
+    if not (isinstance(s, dict) and set(s) <= {"answer_below", "wait", "expect"} and s.get("answer_below") in (300, 400, 500)
+            and _seconds(s.get("wait"), 0, 900) and isinstance(s.get("expect", ""), str) and len(s.get("expect", "")) <= 80):
+        bad.append("update.site: answer_below 300/400/500, wait 0–900, an optional short 'expect'")
+    if u["health"] not in U_HEALTH:
+        bad.append(f"update.health: one of {sorted(U_HEALTH)} (others need a newer updater)")
+    m = u["major"]
+    if not (isinstance(m, dict) and set(m) == {"wait", "dump", "rollback"} and _seconds(m["wait"], 60, 3600)):
+        bad.append("update.major: wait 60–3600, dump, rollback")
+    else:
+        d = m["dump"]
+        kind = d if d == "none" else d.get("kind") if isinstance(d, dict) else None
+        if kind not in U_DUMPS or (kind == "postgres" and not (isinstance(d, dict) and set(d) == {"kind", "service"}
+                                                                and U_NAME.match(str(d.get("service", ""))))):
+            bad.append("update.major.dump: none, or {kind: postgres, service: <name>}")
+        if m["rollback"] not in U_ROLLBACK:
+            bad.append("update.major.rollback: 'image' or 'none'")
+    return bad
+
+
+def check_update_only(r, repo_id=None):
+    """Errors for a format-3 recipe (empty = accepted)."""
+    e = []
+    if not isinstance(r, dict) or r.get("schema") != UPDATE_ONLY_SCHEMA:
+        return ["not a format-3 recipe"]
+    for k in sorted(set(r) - UPDATE_ONLY_KEYS - UPDATE_ONLY_OPTIONAL, key=str):
+        e.append(f"unknown field {str(k)[:40]!r} (format 3 holds update rules only: no compose, gaps or install steps)")
+    for k in sorted(UPDATE_ONLY_KEYS - set(r)):
+        e.append(f"format 3 needs '{k}'")
+    if e:
+        return e
+    if r["kind"] != "update-only":
+        e.append("kind: format 3 is 'update-only'")
+    for k in ("id", "name", "summary"):
+        if not _str(r.get(k), 300) or not r.get(k):
+            e.append(f"'{k}' must be a short text")
+    if _str(r.get("id")) and not ID.match(r["id"]):
+        e.append("'id' must look like <repository>.<app> (lowercase letters, digits, dashes)")
+    elif repo_id and not r["id"].startswith(repo_id + "."):
+        e.append(f"id {r['id']} doesn't start with the repository's id '{repo_id}.'")
+    if "category" in r and not _str(r["category"], 40):
+        e.append("'category' must be a short text")
+    if "links" in r and not (isinstance(r["links"], dict) and len(r["links"]) <= 10
+                             and all(_str(k, 30) and _str(v, 300) for k, v in r["links"].items())):
+        e.append("'links' must map short names to addresses")
+    m = r["match"]
+    imgs = m.get("images") if isinstance(m, dict) and set(m) == {"images"} else None
+    if not (isinstance(imgs, list) and 1 <= len(imgs) <= 3 and all(isinstance(x, str) and IMAGE_NAME.match(x) for x in imgs)
+            and len(set(imgs)) == len(imgs)):
+        e.append("match: {images: [1 to 3 image names, without tag or digest, in small letters]}")
+    e += check_update_block(r["update"])
+    if "pictures" in r:
+        e += pictures_shape(r["pictures"])
+    return e
 
 
 def checked(r, repo_id=None):

@@ -4,7 +4,8 @@
     python3 tools/check.py <repository folder>                    every <app>/recipe.yaml and examples/<app>/recipe.yaml
     python3 tools/check.py <recipe.yaml> --permissions            what the app would get, worked out from the recipe
     python3 tools/check.py <recipe.yaml> --fill answers.yaml      fill it in: the compose file, the .env (masked), the tips
-Also prints how a Store lists it (format 2: category, licence, internet level, a key of yours).
+Also prints how a Store lists it (format 2: category, licence, internet level, a key of yours; format 3: update rules
+only, for an app installed by hand — never on an install page).
 Needs Python 3.11+ and PyYAML."""
 import sys
 sys.dont_write_bytecode = True          # no __pycache__ in the repository folder (publish refuses stray files)
@@ -23,6 +24,9 @@ def load(path):
 
 def store_line(r):
     """How a Store lists it (format 2's facts, worked out by the same code every reader uses)."""
+    if rc.update_only(r):
+        return ("format 3: update rules only, for an app installed by hand (never on an install page); it matches "
+                + ", ".join(r["match"]["images"]) + " — used only after the owner confirms it in the updater")
     f = rc.facts(r)
     if r["schema"] != 2:
         return "format 1: a Store lists it under Other, without licence or internet level (schema: 2 adds them)"
@@ -61,6 +65,8 @@ if __name__ == "__main__":
         sys.exit("refused:\n  " + "\n  ".join(e))
     print("✓ passes")
     print("  Store:", store_line(r))
+    if rc.update_only(r) and ("--permissions" in sys.argv or "--fill" in sys.argv):
+        sys.exit("refused: a format-3 recipe installs nothing: no permissions to show, nothing to fill in")
     try:
         if "--permissions" in sys.argv:
             for kind, what, when in rc.permissions(r):

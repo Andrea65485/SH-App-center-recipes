@@ -1,4 +1,4 @@
-# The recipe format (draft 0.8: format 2)
+# The recipe format (draft 0.9: format 2, and format 3 for apps installed by hand)
 
 A **recipe** describes one self-hosted app so that an updater can install and update it safely, with you. It is **data,
 not a script**: everything that is the same for everyone is written out, and every value that depends on *your* home
@@ -11,7 +11,7 @@ this text is wrong — please fix it in your fork).
 - [The repository](#the-repository) · [A recipe](#a-recipe) · [Format 2: the Store's facts](#format-2-the-stores-facts) ·
   [Format 2: answers inside a longer value](#format-2-answers-inside-a-longer-value) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
   [Extra access](#extra-access) · [What it can do (worked out, not declared)](#what-it-can-do-worked-out-not-declared) ·
-  [Updating](#updating) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
+  [Updating](#updating) · [Format 3: apps installed by hand](#format-3-update-rules-for-an-app-installed-by-hand) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
   [Checking your recipe](#checking-your-recipe) · [Not in this version](#not-in-this-version)
 
 ## The repository
@@ -295,6 +295,43 @@ update:
 - **`major.rollback`** after a major has started: `image` (back to the old image is safe) or `none` (the app changes its
   data on start: Roll back is switched off; the way back is the dump). An app that migrates its database on start is
   `none`.
+
+## Format 3: update rules for an app installed by hand
+
+Some apps are already running at home, installed by hand long before any Store. A **format-3 recipe** carries only
+the *rules* for updating such an app; it installs nothing, and no install page ever shows it (a Store lists it under
+its repository as *"For apps installed by hand"*).
+
+```yaml
+schema: 3
+id: <repository>.home-assistant
+name: Home Assistant
+summary: Home automation that runs at home — update rules for one you installed yourself.
+kind: update-only
+links: {website: https://www.home-assistant.io}           # optional, as in format 1/2; also pictures, category
+match:
+  images: [homeassistant/home-assistant, ghcr.io/home-assistant/home-assistant]
+update:
+  wait: 60                                  # seconds to be running again after the update (10–900)
+  version: compare                          # compare: its own version must be the new one · show-only
+  site: {answer_below: 500, wait: 120}      # its page answers below 300/400/500 within 0–900 s (optional 'expect')
+  health: none                              # none · app-status · ok-detail
+  major: {wait: 900, dump: none, rollback: none}   # wait 60–3600 · dump none or {kind: postgres, service: <name>}
+```
+
+- **No compose, gaps, version or install steps.** A format-3 recipe that has them is refused.
+- **`match.images`**: 1 to 3 image names, without a tag or digest, in small letters (a registry host first is fine).
+  The updater offers the recipe for an app only when **both** the image in its app list **and** the image its
+  container really runs are named here (*detect, don't declare*).
+- **`update`** uses the same rules as the updater's built-in update recipes (optional: `busy: check` for a long job
+  running first, `data_copy: every | major`).
+- **Where the app runs** (machine, project, container) is never in the recipe: it stays the updater's own.
+- **Nothing is used until you confirm it**: Settings → *Sync with the Store* shows the recipe, the running check and
+  the update steps (*"the same as now"*, or what changes). The updater keeps the SHA-256 of exactly the rules you
+  confirmed; when a later serial changes them, the app goes back to its built-in rules until you look again.
+
+**Readers:** the Homelab updater from 0.9.8 and store-watch from 1.3 read format 3. Older ones leave it out
+(*"schema 3 unknown"*) and show the rest of the repository: update them before publishing one.
 
 ## Pictures
 

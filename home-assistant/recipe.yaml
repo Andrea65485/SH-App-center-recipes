@@ -1,0 +1,36 @@
+# Home Assistant — update rules for an app you installed by hand (format 3, see STANDARD.md).
+# Not an install: a Store shows it under "For apps installed by hand". Your updater matches it to the Home Assistant
+# you already run (the image in your app list and the one running must be one named below), shows you the rules, and
+# uses them only after you confirm them. Where it runs (machine, project, container) stays in your own updater.
+# The rules are the updater's built-in ones for Home Assistant, unchanged:
+# - 60 s to be running again after the container is recreated; its own version must be the one expected;
+# - its page must answer below HTTP 500 within 120 s (it answers 200, or a sign-in redirect);
+# - a new major (a new year) waits up to 900 s; no database dump (its database is a file in its config folder, copied
+#   by your own backups); no automatic roll back after a major has started (an older Home Assistant may not read a
+#   newer config).
+# Pictures: the logomark from the Open Home Foundation's brand assets (a trademark: non-commercial use, as here);
+# the screenshots from a fresh 2026.11.1 install with its made-up demo devices.
+schema: 3
+id: sh-app-centre.home-assistant
+name: Home Assistant
+summary: Home automation that runs at home — update rules for one you installed yourself.
+kind: update-only
+links:
+  website: https://www.home-assistant.io
+  source: https://github.com/home-assistant/core
+match:
+  images: [homeassistant/home-assistant, ghcr.io/home-assistant/home-assistant]
+update:
+  wait: 60
+  version: compare
+  site: {answer_below: 500, wait: 120}
+  health: none
+  major: {wait: 900, dump: none, rollback: none}
+pictures:
+  icon: {file: icon.svg, source: project,
+         from: "https://github.com/OpenHomeFoundation/brand-assets/blob/main/home-assistant/logo/screen/logomark/HA-logomark-color.svg",
+         licence: "Trademark of the Open Home Foundation; non-commercial use only"}
+  screenshots:
+    - {file: screenshots/1.webp, source: install, caption: "The overview: your rooms, and a summary of lights, climate, security and media"}
+    - {file: screenshots/2.webp, source: install, caption: "Climate: heating, fans, humidity and windows, each with its own controls"}
+    - {file: screenshots/3.webp, source: install, caption: "Lights: every light at a glance, on or off and how bright"}
