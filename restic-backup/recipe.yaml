@@ -1,0 +1,170 @@
+# Backup (restic): encrypted backups of the folders you choose, to your other NAS. Format 4: it runs only from its
+# tiles in the updater's Tools tab (needs updater 0.11, gate 1.12 and store-watch 1.4 or later).
+# Facts behind it (restic 0.19.1 and rclone 1.71, official images, tried with real Docker on 12 Nov 2026):
+# - both images have arm64 builds; restic is BSD-2-Clause, rclone MIT;
+# - many NAS systems can't mount SMB inside a container (that needs SYS_ADMIN, never given here), so rclone serves
+#   the other NAS's share to restic over the app's own network ("rclone serve restic"); Compose starts it with
+#   restic, and the gate stops it after the run;
+# - --append-only: restic can add snapshots and remove its own locks, but can't delete or change anything (forget is
+#   refused with 403, tested): a NAS that is broken into can't wipe the history through this app. Old snapshots are
+#   pruned by hand;
+# - restic reads everything with DAC_READ_SEARCH alone (cap_drop ALL), and the folders are mounted read only;
+# - a fixed --host keeps the snapshots one series (Compose gives each run a new container name), so the second run
+#   adds only what changed;
+# - profiles: [tool]: nothing of it starts at install or after an update; it runs only from a tile;
+# - the folders to read are one list, as many as you like: each folder F is mounted read only at /data + F, so a
+#   restore shows where every file came from. The other NAS's password is written by the gate in rclone's own
+#   encoded form (encode: rclone-obscure);
+# - restic makes its store only when asked (init), and a backup into a store never made fails (exit 10, tested):
+#   hence the 'Start the backups (once)' tile.
+# Not yet: an update of an app that never runs (a new restic version means installing it again; the backups stay,
+# they live on the other NAS), and a restore-test tile.
+schema: 4
+id: sh-app-centre.restic-backup
+name: Backup (restic)
+summary: Encrypted backups of the folders you choose, to your other NAS — started and checked from the updater's Tools tab.
+category: files
+licence: BSD-2-Clause
+use_from: [tools-tab]
+version: "0.19.1"
+links: {home: "https://restic.net", notes: "https://github.com/restic/restic/releases"}
+needs:
+  platforms: [linux/amd64, linux/arm64]
+  memory_mb: 1024
+  internet: {level: none}
+  elevated:
+    reads-all-data: "It backs up the folders you choose, other apps' data included, so it must read every file in them — read only: it can't change or delete anything there."
+slots:
+  app:
+    type: folder
+    suggest: app-folder
+    question: "Where should the backup keep its notes and cache"
+    help: "Its cache (it makes the next backups faster) and the kept output of each run. Nothing of your data."
+  sources:
+    type: folder
+    suggest: any-data
+    many: true
+    question: "The folders to back up"
+    help: "As many as you like: any folder on this machine, other apps' included. They're only read. You'll approve each on the NAS."
+  nas_address:
+    type: text
+    question: "Your other NAS's address at home"
+    help: "The address of the NAS that keeps the backups, as you'd type it in a browser on the home network, without http."
+  share:
+    type: text
+    question: "Its shared folder for the backups"
+    help: "The name of the shared folder on that NAS, without spaces (make one there first if needed)."
+  folder:
+    type: text
+    default: restic
+    question: "A folder inside it, for this machine's backups"
+    help: "Made by the first backup. Letters, digits and dashes; no spaces."
+  nas_user:
+    type: text
+    question: "The account on that NAS that writes the backups"
+    help: "An account of its own on that NAS, allowed into that shared folder only."
+  nas_pass:
+    type: secret
+    source: ask
+    question: "That account's password"
+    encode: rclone-obscure
+    help: "Kept on this NAS in the app's private settings, never shown. The NAS writes it there in rclone's own encoded form."
+  repo_pass:
+    type: secret
+    source: ask
+    kind: password
+    question: "A password for the backups themselves"
+    help: "Everything is encrypted with it. Without it NO backup can be restored: put it in your password manager first."
+  ping_on:
+    type: toggle
+    default: false
+    "on": "yes"
+    "off": "no"
+    question: "Tell Healthchecks when a backup ends well"
+    help: "Off: no message. On: the NAS calls your check's address after each good backup, so a missed one alerts you."
+  hc_url:
+    type: secret
+    source: ask
+    asked_if: ping_on
+    question: "Your Healthchecks check's address"
+    help: "From your check's page in Healthchecks. Kept for the NAS only, never shown, never given to the backup itself."
+compose:
+  services:
+    restic:
+      image: restic/restic:0.19.1
+      profiles: [tool]
+      restart: "no"
+      depends_on: [rclone]
+      read_only: true
+      cap_drop: [ALL]
+      cap_add: [DAC_READ_SEARCH]
+      security_opt: ["no-new-privileges:true"]
+      tmpfs: [/tmp]
+      environment:
+        RESTIC_REPOSITORY: "rest:http://rclone:8000/"
+        RESTIC_PASSWORD: "{{repo_pass}}"
+        RESTIC_CACHE_DIR: /cache
+      volumes: ["{{app}}/cache:/cache", "{{sources}}:/data:ro"]
+    rclone:
+      image: rclone/rclone:1.71
+      profiles: [tool]
+      restart: "no"
+      read_only: true
+      cap_drop: [ALL]
+      security_opt: ["no-new-privileges:true"]
+      tmpfs: [/tmp]
+      command: ["serve", "restic", "syn:{{share}}/{{folder}}", "--addr", ":8000", "--append-only"]
+      environment:
+        RCLONE_CONFIG_SYN_TYPE: smb
+        RCLONE_CONFIG_SYN_HOST: "{{nas_address}}"
+        RCLONE_CONFIG_SYN_USER: "{{nas_user}}"
+        RCLONE_CONFIG_SYN_PASS: "{{nas_pass}}"
+tools:
+  - id: back-up-now
+    label: Back up now
+    summary: "Your apps' database dumps first, then every chosen folder; only what changed since the last one is sent."
+    kind: change
+    confirm: backup
+    timeout: 21600
+    dumps_first: true
+    ping: hc_url
+    run: {service: restic, args: [backup, /data, --host, nas, --tag, updater, --exclude-caches]}
+  - id: last-backup
+    label: The last backup's report
+    summary: "What the last Back up now printed: files, sizes, what was added, and whether it ended well."
+    kind: read
+    timeout: 10
+    last_of: back-up-now
+  - id: snapshots
+    label: Snapshots
+    summary: "Every backup kept, newest last, with its date and folders."
+    kind: read
+    timeout: 300
+    run: {service: restic, args: [snapshots, --host, nas, --compact]}
+  - id: check
+    label: Check the backups
+    summary: "Checks the backups' structure: that every piece they need is there. Quick; reads little."
+    kind: read
+    timeout: 3600
+    run: {service: restic, args: [check]}
+  - id: check-data
+    label: Read back a sample
+    summary: "Reads back part of the stored data and checks it: slow, and it reads from the other NAS."
+    kind: read
+    timeout: 21600
+    run: {service: restic, args: [check, {pick: {question: "How much to read back", options: {"A twentieth": "--read-data-subset=5%", "A tenth": "--read-data-subset=10%", "All of it (hours)": "--read-data"}}}]}
+  - id: start
+    label: Start the backups (once)
+    summary: "Makes the encrypted store on the other NAS. Once, before the first backup: a backup without it fails."
+    kind: change
+    confirm: start
+    timeout: 600
+    run: {service: restic, args: [init]}
+update:
+  main: restic
+  tags: '^\d+\.\d+\.\d+$'
+  health: {check: running-digest, service: restic, wait: 60}
+  major: {one_at_a_time: true, dump: {kind: none}, rollback: image}
+pictures:   # no screenshots: it has no page of its own (its tiles are in the updater's Tools tab)
+  icon: {file: icon.png, source: project, from: "https://github.com/restic/restic/blob/c734245fd3ae9bcac8ab3aaafb4482d4b5d0ae92/doc/logo/logo.png",
+         licence: "BSD-2-Clause, © 2014 Alexander Neumann (restic's repository); Go gopher design by Renée French, CC BY 4.0 (a 256-px PNG)"}

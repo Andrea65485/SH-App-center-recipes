@@ -28,8 +28,12 @@ def store_line(r):
         return ("format 3: update rules only, for an app installed by hand (never on an install page); it matches "
                 + ", ".join(r["match"]["images"]) + " — used only after the owner confirms it in the updater")
     f = rc.facts(r)
-    if r["schema"] != 2:
+    if r["schema"] not in rc.F2:
         return "format 1: a Store lists it under Other, without licence or internet level (schema: 2 adds them)"
+    if r["schema"] == rc.TOOLS_SCHEMA:          # card 60: today's updaters (0.10.2) and store-watch 1.3 leave it out
+        return (f"format 4: {f['tools']} Tools-tab tile(s)" + (", reads all data you choose" if f["reads_all_data"] else "")
+                + " · needs updater 0.11 + gate 1.12 + store-watch 1.4 (older readers leave this app out; the rest of "
+                "the Store is unchanged)")
     key = {"needed": "needed", "optional": "only for some answers: a feature you switch on, or one of the choices", "no": "not needed"}[f["own_key"]]
     return (f"format 2: {', '.join(rc.CATEGORIES[c] for c in f['categories'])} · licence {f['licence']} ("
             + ("open source" if f["open_source"] else "not an open-source licence") + f") · internet {f['internet']} · "

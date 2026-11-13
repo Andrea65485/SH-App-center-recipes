@@ -1,4 +1,4 @@
-# The recipe format (draft 0.9: format 2, and format 3 for apps installed by hand)
+# The recipe format (draft 0.10: format 2, format 3 for apps installed by hand, format 4 for tools)
 
 A **recipe** describes one self-hosted app so that an updater can install and update it safely, with you. It is **data,
 not a script**: everything that is the same for everyone is written out, and every value that depends on *your* home
@@ -11,7 +11,7 @@ this text is wrong — please fix it in your fork).
 - [The repository](#the-repository) · [A recipe](#a-recipe) · [Format 2: the Store's facts](#format-2-the-stores-facts) ·
   [Format 2: answers inside a longer value](#format-2-answers-inside-a-longer-value) · [Gaps](#gaps) · [The compose part](#the-compose-part) ·
   [Extra access](#extra-access) · [What it can do (worked out, not declared)](#what-it-can-do-worked-out-not-declared) ·
-  [Updating](#updating) · [Format 3: apps installed by hand](#format-3-update-rules-for-an-app-installed-by-hand) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
+  [Updating](#updating) · [Format 3: apps installed by hand](#format-3-update-rules-for-an-app-installed-by-hand) · [Format 4: tools](#format-4-tools-tiles-and-reading-other-apps-data) · [Pictures](#pictures) · [The file itself](#the-file-itself) · [Signing and publishing](#signing-and-publishing) ·
   [Checking your recipe](#checking-your-recipe) · [Not in this version](#not-in-this-version)
 
 ## The repository
@@ -332,6 +332,67 @@ update:
 
 **Readers:** the Homelab updater from 0.9.8 and store-watch from 1.3 read format 3. Older ones leave it out
 (*"schema 3 unknown"*) and show the rest of the repository: update them before publishing one.
+
+## Format 4: Tools tiles, and reading other apps' data
+
+**Read by updater 0.11, gate 1.12 and store-watch 1.4 and later.** Older readers leave a format-4 recipe out
+(*"schema 4 unknown"*) and show the rest of the repository. A format-4 recipe is a format-2 recipe with three more
+things. It suits a **tool** (a backup, a check) that runs only when you start it from the updater's Tools tab.
+
+```yaml
+schema: 4
+use_from: [tools-tab]
+needs:
+  elevated:
+    reads-all-data: "It backs up the folders you choose, so it must read every file in them — read only."
+slots:
+  sources: {type: folder, suggest: any-data, many: true, question: "The folders to back up", help: "As many as you like. Only read."}
+  nas_pass: {type: secret, source: ask, encode: rclone-obscure, question: "That account's password", help: "Never shown."}
+compose:
+  services:
+    restic:
+      image: restic/restic:0.19.1
+      profiles: [tool]                    # never started by an install or an update
+      restart: "no"
+      read_only: true
+      cap_drop: [ALL]
+      cap_add: [DAC_READ_SEARCH]          # = reads-all-data: read everything, write nothing
+      security_opt: ["no-new-privileges:true"]
+      tmpfs: [/tmp]
+      volumes: ["{{sources}}:/data:ro"]           # each folder F is mounted at /data + F, read only
+tools:
+  - id: snapshots
+    label: Snapshots
+    summary: Every backup kept, with its date.
+    kind: read                            # read: runs at once · change: asks first, with a typed 'confirm' word
+    timeout: 300
+    run: {service: restic, args: [snapshots, --compact]}
+```
+
+- **`tools`**: 1 to 8 tiles.
+  - Each tile has an `id`, a `label`, a `summary`, a `kind` and a `timeout` (10–21600 s), and **exactly one** action:
+    - `run`, with plain one-word args (letters, digits, `/ % + = : , . _ @ -`; no spaces, `$`, quotes or gaps), and at
+      most one `{pick: {question, options}}`, a list you choose from;
+    - or `last_of: <tile>`, which shows that tile's last output.
+  - Change tiles may have `dumps_first: true` and `ping: <a pasted secret>`, an address the machine calls after a good
+    run. The app never sees it.
+  - Unknown tile keys are refused.
+- **A tile's services** (and the services they depend on) have `profiles: [tool]`, `restart: "no"` and no ports.
+  Every profiled service is used by a tile.
+- **`reads-all-data`** is the only way to reach other apps' folders:
+  - **one** folder gap with `suggest: any-data` and `many: true`: a list of folders, **as many as you like**, never mixed
+    with `yours`, always asked (no `default`, `sub`, `advanced` or `asked_if`). It's used once, as
+    `"{{gap}}:/inside:ro"`: each folder F becomes its own volume, `F:/inside F:ro` (so `/data/srv/photos` for
+    `/srv/photos`). Each folder is a plain full path without `:` or `,`, none listed twice and none inside another;
+  - `DAC_READ_SEARCH` alone, with `cap_drop: [ALL]`, on the service that mounts them;
+  - **you approve each folder on the machine itself**, as with your folders.
+- **`encode: rclone-obscure`** on a secret you paste (`source: ask`): the machine writes it into `.env` in rclone's own
+  encoded form (gate 1.12). Only as a whole value, never inside one, never on a `ping`. It's an encoding, not
+  protection: `.env` stays readable by root only.
+- **Hardening keys**, accepted in format 4 in one form each: `read_only: true`, `cap_drop: [ALL]`,
+  `security_opt: ["no-new-privileges:true"]`, `tmpfs` (plain paths), `profiles: [tool]`.
+- The tiles run only while the signed recipe, the dashboard's copy and what you accepted on the machine have **the same
+  fingerprint** (the SHA-256 of the `tools:` list). After a change you accept the tiles again.
 
 ## Pictures
 

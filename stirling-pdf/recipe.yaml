@@ -1,5 +1,7 @@
 # Stirling-PDF — PDF tools in the browser (merge, split, rotate, compress, convert, read scanned text), on your own machine.
-# Facts read from Stirling-PDF v3.2.2's own files (tag v3.2.2, 8 Nov 2026), not from its docs:
+# Facts read from Stirling-PDF v3.2.2's own files (tag v3.2.2, 8 Nov 2026), not from its docs; v3.3.0's (13 Nov) say the same
+# (LICENSE files, InitialSecuritySetup.java, SoftwareUpdatesCard.tsx unchanged; settings.yml.template and the Dockerfile only
+# gained unrelated limits; the image now also sets ORT_DISABLE_TELEMETRY=1):
 # - licence: its LICENSE is MIT except some folders (app/proprietary, app/saas, engine, frontend/src/processor and
 #   frontend/src/editor/{proprietary,desktop,saas,cloud}), which are under the "Stirling PDF User License": production
 #   use needs a paid licence; free only for internal trial, evaluation or minimal use. The image this recipe installs
@@ -17,7 +19,7 @@
 #   anyone at home who signs in first chooses it. So the recipe asks for your password and passes it as
 #   security.initialLogin, used only when it has no accounts yet: no default account is ever made. Tested 8 Nov, offline:
 #   default password refused, yours accepted, also after a restart. Changing it later is done in its own settings.
-# Tested 8 Nov (3.2.2, offline): the page receives enableAnalytics/enablePosthog/enableScarf false and
+# Tested 8 Nov (3.2.2) and 13 Nov (3.3.0), offline, both alike: the page receives enableAnalytics/enablePosthog/enableScarf false and
 # shouldShowUpdate false (defaults: null, null, null, true).
 schema: 2
 id: sh-app-centre.stirling-pdf
@@ -26,7 +28,7 @@ summary: PDF tools in your browser — merge, split, rotate, compress, convert, 
 category: documents
 licence: LicenseRef-Stirling-PDF-MIT-and-proprietary   # MIT core + proprietary-licensed parts in the image (see above)
 use_from: [browser]
-version: "3.2.2"
+version: "3.3.0"
 links: {home: "https://github.com/Stirling-Tools/Stirling-PDF", notes: "https://github.com/Stirling-Tools/Stirling-PDF/releases"}
 needs:
   platforms: [linux/amd64, linux/arm64]
@@ -74,7 +76,7 @@ tips:
 compose:
   services:
     stirling-pdf:
-      image: stirlingtools/stirling-pdf:3.2.2
+      image: stirlingtools/stirling-pdf:3.3.0
       ports: ["{{address}}:8080"]
       volumes: ["{{settings}}:/configs", "{{logs}}:/logs"]
       environment:

@@ -11,21 +11,24 @@ reasons, or Refused) and never falls over on a malformed file. In order:
   permissions(r)      what the app would get, worked out from the recipe itself — never from text its author wrote
 """
 
-import ipaddress, json, re, secrets, string, urllib.parse
+import hashlib, ipaddress, json, re, secrets, string, urllib.parse
 
 import yaml
 
 MAX_BYTES = 64 * 1024
-TYPES = {"folder": {"app-folder", "yours"}, "port": {"free-port"}, "secret": set(), "timezone": {"host"}, "user": {"host"},
+TYPES = {"folder": {"app-folder", "yours", "any-data"}, "port": {"free-port"}, "secret": set(), "timezone": {"host"}, "user": {"host"},
          "choice": set(), "toggle": set(), "number": set(), "text": set(), "url": {"your-domain", "lan-address"},
          "networks": {"home-network"}}
 SERVICE_KEYS = {"image", "ports", "volumes", "environment", "depends_on", "deploy", "restart", "healthcheck", "command", "user"}
 USER_FORM = re.compile(r"^\{\{\s*([a-z_][a-z0-9_]*)\.uid\s*\}\}:\{\{\s*\1\.gid\s*\}\}$")   # user: "{{owner.uid}}:{{owner.gid}}" only
 # Extra access a recipe may ask for, only by declaring it (needs.elevated) with a reason in plain words — and nothing else.
 ELEVATED = {"host-network": ("network_mode", "host"), "net-admin": ("cap_add", "NET_ADMIN"),
-            "net-raw": ("cap_add", "NET_RAW"), "tun-device": ("devices", "/dev/net/tun:/dev/net/tun")}
+            "net-raw": ("cap_add", "NET_RAW"), "tun-device": ("devices", "/dev/net/tun:/dev/net/tun"),
+            "reads-all-data": ("cap_add", "DAC_READ_SEARCH")}          # format 4 only (below)
 ELEVATED_WORDS = {"host-network": "joins the home network directly", "net-admin": "may change network settings",
-                  "net-raw": "may send raw test messages", "tun-device": "a virtual network card"}
+                  "net-raw": "may send raw test messages", "tun-device": "a virtual network card",
+                  "reads-all-data": "reads every file in the folders you choose, whoever it belongs to — other apps' "
+                                    "data included (read only)"}
 HEALTH = {"http-status", "container-health", "running-digest", "app-status", "ok-detail"}
 DUMPS = {"postgres", "mariadb", "stop-and-copy", "none"}
 ROLLBACK = {"image", "none"}          # after a major has started: back to the old image, or Roll back off
@@ -55,7 +58,7 @@ PIC_SHOT = re.compile(r"^screenshots/[1-4]\.(webp|png)$")
 PIC_SOURCES = {"install", "project", "mockup"}     # a fresh install by the publisher · the app's own site or repository · a mockup
 PIC_FROM = re.compile(r"^https://[A-Za-z0-9.-]{1,100}(/[A-Za-z0-9._~%/#?=&+-]{0,300})?$")
 SLOT_KEYS = {"type", "question", "help", "suggest", "default", "advanced", "source", "length", "options", "on", "off",
-             "under", "sub", "asked_if", "prefix", "kind", "shape"}
+             "under", "sub", "asked_if", "prefix", "kind", "shape", "many", "encode"}
 SECRET_KINDS = {"password"}          # 0.9.6: an ask secret with kind: password is one you choose, not a key of yours
 # 0.9.6: a key some apps take only in one shape. A closed list, never a recipe's own pattern. Refused here first: the app
 # itself would print what was typed in its log (the DDNS updater does), and that may be another password pasted by mistake.
@@ -65,8 +68,32 @@ SHAPES = {"uuid": (re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 NEEDS_KEYS = {"platforms", "memory_mb", "elevated", "internet", "https"}
 # ---- format 2 (owner, 7 Nov: "more metadata for the store … categories or info for using filters"). Format 1 stays as
 # it is (today's readers know only it); format 2 adds the fields below, all checked here, and optional pasted secrets.
-SCHEMAS = (1, 2)
+SCHEMAS = (1, 2, 4)                   # 3 = update rules only (below); 4 = format 2 + tools + reads-all-data
 TOP_KEYS_2 = TOP_KEYS | {"also", "licence", "use_from"}
+# ---- format 4 (card 60, owner 12 Nov; recipe-format-4-design.md): everything of format 2, plus
+#   tools:  tiles for the updater's Tools tab, each ONE action from a fixed list — a service of this recipe run once
+#           with fixed arguments (or one picked from a fixed list), or the kept output of such a run. Never a command
+#           line, never a shell, never text typed at the tile. The gate runs only a tools section accepted by hand.
+#   needs.elevated.reads-all-data: folder gaps 'suggest: any-data' (other apps' folders and Team folders included),
+#           each mounted whole and read only and approved one by one on the machine; DAC_READ_SEARCH, only with
+#           cap_drop: [ALL]. Plus keys that only take access away (read_only, cap_drop, security_opt, tmpfs) and
+#           profiles: [tool] (a service that never starts on its own).
+F2 = (2, 4)                           # the formats with format 2's fields
+TOOLS_SCHEMA = 4
+TOP_KEYS_4 = TOP_KEYS_2 | {"tools"}
+TOOLS_MAX, PICK_MAX, ARGS_MAX = 8, 10, 24
+# Gate 1.12 (owner, 12 Nov, open points 1 and 6): the folders to read are ONE list gap (many: true), with no limit on how
+# many; and a pasted secret may say how the gate writes it into .env (encode:), from this closed list only.
+ENCODINGS = {"rclone-obscure"}        # rclone's own encoded form of a password (an encoding, not protection: .env is 600)
+TOOL_ID = re.compile(r"^[a-z][a-z0-9-]{1,29}$")
+TOOL_KINDS = {"read", "change"}       # read: runs at once (it only looks); change: says what it does, asks a typed word
+CONFIRM = re.compile(r"^[a-z]{3,20}$")
+ARG = re.compile(r"^[A-Za-z0-9/%+=:,._@-]{1,120}$")    # no spaces, quotes, $, { }, ; | & < > \ or line breaks
+TMPFS = re.compile(r"^/[a-z0-9_/-]{1,60}$")
+MANY_VOLUME = re.compile(r"^\{\{\s*[a-z_][a-z0-9_]*\s*\}\}:(/[a-z0-9_-]{1,30})+:ro$")   # each folder F → F:<inside>F:ro
+DATA = "reads-all-data"
+HARDENING = {"read_only", "cap_drop", "security_opt", "tmpfs", "profiles"}
+USE_FROM_4 = {"tools-tab": "the updater's Tools tab"}
 # One fixed list (format 1's free text had drifted into 16 spellings). The words are the Store's filter labels.
 CATEGORIES = {"media": "Films, TV and audiobooks", "music": "Music", "photos": "Photos", "games": "Games",
               "reading": "News, bookmarks and books", "documents": "Documents and PDFs", "files": "Files, sync and backups",
@@ -274,8 +301,8 @@ def shape(r):
         return ["the file isn't a mapping of fields"]
     if r.get("schema") not in SCHEMAS or isinstance(r.get("schema"), bool):
         return [f"schema {r.get('schema')!r} unknown: refused"]
-    v2 = r["schema"] == 2
-    for k in sorted(set(r) - (TOP_KEYS_2 if v2 else TOP_KEYS), key=str):
+    v2, v4 = r["schema"] in F2, r["schema"] == TOOLS_SCHEMA
+    for k in sorted(set(r) - (TOP_KEYS_4 if v4 else TOP_KEYS_2 if v2 else TOP_KEYS), key=str):
         e.append(f"unknown field {str(k)[:40]!r}")
     for k in ("id", "name", "summary", "version"):
         if not _str(r.get(k), 300) or not r.get(k):
@@ -333,6 +360,10 @@ def shape(r):
             e.append(f"{where}: 'length' must be a number")
         if "advanced" in s and not isinstance(s["advanced"], bool):
             e.append(f"{where}: 'advanced' is true or false")
+        if "many" in s and s["many"] is not True:
+            e.append(f"{where}: 'many' is true, or left out")
+        if "encode" in s and not (isinstance(s["encode"], str) and s["encode"] in ENCODINGS):
+            e.append(f"{where}: 'encode' is one of: {', '.join(sorted(ENCODINGS))}")
         if "default" in s and not (_scalar(s["default"]) or _strs(s["default"], 10, 60)):
             e.append(f"{where}: 'default' must be a plain value")
         if "options" in s:
@@ -367,6 +398,12 @@ def shape(r):
             for k in ("restart", "network_mode", "user"):
                 if k in svc and not _str(svc[k], 40):
                     e.append(f"{where}: '{k}' must be a short text")
+            if v4:                                    # format 4: keys that only take access away, and profiles
+                for k in ("cap_drop", "security_opt", "tmpfs", "profiles"):
+                    if k in svc and not (isinstance(svc[k], list) and 0 < len(svc[k]) <= 4 and all(_str(x, 80) for x in svc[k])):
+                        e.append(f"{where}: '{k}' must be a short list of short values")
+                if "read_only" in svc and svc["read_only"] is not True:
+                    e.append(f"{where}: 'read_only' is true, or left out")
             if "environment" in svc and not (isinstance(svc["environment"], dict) and len(svc["environment"]) <= 60 and
                                              all(isinstance(k, str) and ENV_NAME.match(k) and (_scalar(v) or _entry_shape(v))
                                                  for k, v in svc["environment"].items())):
@@ -395,6 +432,59 @@ def shape(r):
                 and all(_str(v, 40) for v in m.get("dump", {}).values()) and _str(m.get("rollback", ""), 20)
                 and isinstance(m.get("one_at_a_time", True), bool)):
             e.append("update.major: dump {kind, service or folder}, rollback, one_at_a_time")
+    if v4:
+        e += tools_shape(r.get("tools"))
+    return e
+
+
+TOOL_KEYS = {"id", "label", "summary", "kind", "confirm", "timeout", "run", "last_of", "dumps_first", "ping"}
+
+
+def tools_shape(tools):
+    """Format 4: the tools section's types and sizes (1 to 8 tiles). Its meaning is check_tools'."""
+    if not (isinstance(tools, list) and 0 < len(tools) <= TOOLS_MAX):
+        return [f"'tools': a list of 1 to {TOOLS_MAX} tiles (a format-4 recipe has tools; without them use format 2)"]
+    e = []
+    for i, t in enumerate(tools):
+        where = f"tools[{i}]"
+        if not isinstance(t, dict):
+            e.append(f"{where}: must be a mapping"); continue
+        if set(t) - TOOL_KEYS:
+            e.append(f"{where}: unknown keys {sorted(map(str, set(t) - TOOL_KEYS))} (an action this reader doesn't know "
+                     "is refused, never skipped)")
+        if not (_str(t.get("id"), 30) and TOOL_ID.match(t["id"])):
+            e.append(f"{where}: 'id' is 2–30 small letters, digits and dashes, starting with a letter")
+        for k, n in (("label", 40), ("summary", 200)):
+            if not (_str(t.get(k), n) and t[k].strip() and not UNSAFE.search(t[k])):
+                e.append(f"{where}: '{k}' is a text of at most {n} characters, one line, without {{ }} $ `")
+        if not (isinstance(t.get("kind"), str) and t["kind"] in TOOL_KINDS):
+            e.append(f"{where}: 'kind' is read (runs at once: it only looks) or change (asks you first)")
+        if "confirm" in t and not (_str(t["confirm"], 20) and CONFIRM.match(t["confirm"])):
+            e.append(f"{where}: 'confirm' is one word of 3–20 small letters (the word you type to start it)")
+        if not _int(t.get("timeout"), 10, 21600):
+            e.append(f"{where}: 'timeout' is 10–21600 seconds")
+        if "dumps_first" in t and not isinstance(t["dumps_first"], bool):
+            e.append(f"{where}: 'dumps_first' is true or false")
+        if "ping" in t and not (_str(t["ping"], 40) and SLOT_NAME.match(t["ping"])):
+            e.append(f"{where}: 'ping' names a gap")
+        if "last_of" in t and not (_str(t["last_of"], 30) and TOOL_ID.match(t["last_of"])):
+            e.append(f"{where}: 'last_of' names another tile")
+        if "run" in t:
+            run = t["run"]
+            if not (isinstance(run, dict) and set(run) <= {"service", "args"} and _str(run.get("service"), 40)
+                    and isinstance(run.get("args", []), list) and len(run.get("args", [])) <= ARGS_MAX):
+                e.append(f"{where}: run is {{service, args: up to {ARGS_MAX}}}"); continue
+            for a in run.get("args", []):
+                if isinstance(a, dict):
+                    p = a.get("pick")
+                    if not (set(a) == {"pick"} and isinstance(p, dict) and set(p) == {"question", "options"}
+                            and _str(p["question"], 70) and isinstance(p["options"], dict)
+                            and 0 < len(p["options"]) <= PICK_MAX
+                            and all(_str(k, 40) and _str(v, 120) for k, v in p["options"].items())):
+                        e.append(f"{where}: a picked argument is {{pick: {{question, options: up to {PICK_MAX} labels → "
+                                 "values}}}")
+                elif not _str(a, 120):
+                    e.append(f"{where}: each argument is a short text, or one {{pick: …}}")
     return e
 
 
@@ -457,6 +547,10 @@ def check_slots(slots, err, warn):
         if "kind" in s and not (t == "secret" and s.get("source") == "ask" and s["kind"] in SECRET_KINDS):
             err.append(f"slot {name}: 'kind: password' is only for a secret you type in (source: ask) — a password you "
                        "choose yourself, not a key from another service")
+        if "many" in s and not (t == "folder" and s.get("suggest") == "any-data"):
+            err.append(f"slot {name}: 'many' is only for the folders to read (suggest: any-data): one list of folders")
+        if "encode" in s and not (t == "secret" and s.get("source") == "ask"):
+            err.append(f"slot {name}: 'encode' is only for a secret you type in (source: ask)")
         if "shape" in s and not (t == "secret" and s.get("source") == "ask" and isinstance(s["shape"], str)
                                 and s["shape"] in SHAPES):
             err.append(f"slot {name}: 'shape' is only for a secret you type in (source: ask), and is one of: "
@@ -473,7 +567,7 @@ def check_slots(slots, err, warn):
             for side in ("on", "off"):
                 for m in SLOT.finditer(str(s.get(side, ""))):
                     ref = slots.get(m.group(1), {})
-                    if ref.get("type") in (None, "secret", "toggle") or isinstance(ref.get("asked_if"), dict):
+                    if ref.get("type") in (None, "secret", "toggle") or isinstance(ref.get("asked_if"), dict) or ref.get("many"):
                         err.append(f"slot {name}: its '{side}' value may only use other plain gaps, not {m.group(1)!r}")
         elif "on" in s or "off" in s:
             err.append(f"slot {name}: only a toggle has 'on' and 'off'")
@@ -484,9 +578,9 @@ def check_slots(slots, err, warn):
             base = slots.get(s["under"], {})
             if base.get("type") != "folder" or "under" in base or t != "folder" or not s.get("sub"):
                 err.append(f"slot {name}: 'under' needs a folder gap of its own, a main folder gap, and a 'sub'")
-            elif base.get("suggest") == "yours":
+            elif base.get("suggest") in ("yours", "any-data"):
                 err.append(f"slot {name}: nothing goes 'under' a folder of yours: it's only read, never made or written")
-        elif t == "folder" and s.get("suggest") not in ("app-folder", "yours"):
+        elif t == "folder" and s.get("suggest") not in ("app-folder", "yours", "any-data"):
             err.append(f"slot {name}: a folder gap says 'suggest: app-folder' (made for the app) or 'suggest: yours' "
                        "(one you already have, read only)")
         if t == "folder" and s.get("suggest") == "yours":
@@ -520,9 +614,10 @@ def shape_2(r):
         e.append("'also': up to 2 more categories from the same list, different from 'category'")
     if not (_str(r.get("licence"), 60) and LICENCE.match(r["licence"])):
         e.append("'licence': the app's licence as its SPDX name (e.g. AGPL-3.0-only, MIT, CC-BY-NC-SA-4.0)")
-    u = r.get("use_from")
-    if not (isinstance(u, list) and 1 <= len(u) <= len(USE_FROM) and all(x in USE_FROM for x in u) and len(set(u)) == len(u)):
-        e.append(f"'use_from': 1–{len(USE_FROM)} of {', '.join(USE_FROM)}")
+    u, uf = r.get("use_from"), (USE_FROM | USE_FROM_4) if r.get("schema") == TOOLS_SCHEMA else USE_FROM
+    if not (isinstance(u, list) and 1 <= len(u) <= len(uf) and all(isinstance(x, str) and x in uf for x in u)
+            and len(set(u)) == len(u)):
+        e.append(f"'use_from': 1–{len(uf)} of {', '.join(uf)}")
     i = (r.get("needs") or {}).get("internet") if isinstance(r.get("needs"), dict) else None
     if not (isinstance(i, dict) and set(i) <= {"level", "why"} and i.get("level") in INTERNET
             and (_str(i.get("why"), 300) and i.get("why") if i.get("level") != "none" else ("why" not in i or _str(i["why"], 300)))):
@@ -546,7 +641,7 @@ def facts(r):
     """The Store's filter facts, worked out from a passed recipe (format 1 or 2) — most from what it already says, so
     they can't drift from it. Format 1 has only its free-text category: it goes under 'other'."""
     checked(r)
-    v2, slots, n = r["schema"] == 2, r["slots"], r.get("needs") or {}
+    v2, slots, n = r["schema"] in F2, r["slots"], r.get("needs") or {}
     asks = [s for s in slots.values() if s["type"] == "secret" and s.get("source") == "ask"
             and s.get("kind") != "password"]       # a password you choose isn't a key from another service (0.9.6)
     return {"categories": ([r["category"]] + r.get("also", [])) if v2 else ["other"],
@@ -554,7 +649,9 @@ def facts(r):
             "memory_mb": n.get("memory_mb"),
             "own_key": "needed" if any(always(slots, s.get("asked_if"), [x.get("asked_if") for x in asks]) for s in asks)
                        else "optional" if asks else "no",
-            "your_folders": any(s["type"] == "folder" and s.get("suggest") == "yours" for s in slots.values()),
+            "your_folders": any(s["type"] == "folder" and s.get("suggest") in ("yours", "any-data") for s in slots.values()),
+            "reads_all_data": DATA in (n.get("elevated") or {}),          # format 4
+            "tools": len(r.get("tools") or []),
             "extra_access": bool(n.get("elevated")),
             "licence": r.get("licence"), "open_source": r.get("licence") in OPEN_SOURCE,
             "internet": n["internet"]["level"] if v2 else None,
@@ -581,11 +678,11 @@ def _check(r, repo_id):
     slots = r["slots"]
     check_slots(slots, err, warn)
     for name, s in slots.items():
-        if s.get("type") == "secret" and "asked_if" in s and r["schema"] != 2:
+        if s.get("type") == "secret" and "asked_if" in s and r["schema"] not in F2:
             err.append(f"slot {name}: a secret asked only when a switch is on needs format 2 (schema: 2)")
-        if "kind" in s and r["schema"] != 2:
+        if "kind" in s and r["schema"] not in F2:
             err.append(f"slot {name}: 'kind' needs format 2 (schema: 2)")
-        if isinstance(s.get("asked_if"), dict) and r["schema"] != 2:
+        if isinstance(s.get("asked_if"), dict) and r["schema"] not in F2:
             err.append(f"slot {name}: a gap asked for some answers of a choice needs format 2 (schema: 2)")
     elevated = (r.get("needs") or {}).get("elevated") or {}
     for e, why in elevated.items():
@@ -593,6 +690,8 @@ def _check(r, repo_id):
             err.append(f"needs.elevated: {e!r} can never be granted")
         elif len(why) < 20:
             err.append(f"needs.elevated: {e} needs a reason in plain words")
+        elif e == DATA and r["schema"] != TOOLS_SCHEMA:
+            err.append(f"needs.elevated: {DATA} needs format 4 (schema: 4)")
     allowed = {}
     for e in elevated:
         if e in ELEVATED:
@@ -611,6 +710,12 @@ def _check(r, repo_id):
     yours = {n for n, s in slots.items() if s.get("type") == "folder" and s.get("suggest") == "yours"}
     if len(yours) > YOURS_MAX:
         err.append(f"at most {YOURS_MAX} folders of yours per app ({len(yours)} declared)")
+    data = {n for n, s in slots.items() if s.get("type") == "folder" and s.get("suggest") == "any-data"}
+    check_data(r, slots, data, yours, elevated, err)
+    for n, s in slots.items():                         # gate 1.12: an older gate wouldn't know how to write it
+        if "encode" in s and r["schema"] != TOOLS_SCHEMA:
+            err.append(f"slot {n}: 'encode' needs format 4 (gate 1.12)")
+    yours = yours | data                               # from here on: both are only read, mounted whole
     inside = tuple(f".services.{sn}.environment.{k}." for sn, k, _ in entries(r["compose"]))
     check_entries(r, slots, err, used)
     for path, text in walk(r["compose"]):
@@ -629,23 +734,33 @@ def _check(r, repo_id):
                            "use it inside a value split by that choice (inside, by, cases)")
             elif slots[base]["type"] == "secret" and not (".environment." in path and WHOLE.match(text)):
                 err.append(f"{path}: a secret may only be a whole environment value (so it can go to .env)")
+            elif base in data and re.match(r"^\.services\.[^.\[]+\.volumes\[[0-9]+\]$", path):
+                pass                                   # format 4: the folders to read, one volume each (MANY_VOLUME)
             elif "asked_if" in slots[base] and slots[base]["type"] != "secret":
                 err.append(f"{path}: '{{{{{base}}}}}' is only asked when a switch is on: use it inside that switch's 'on' value")
     for path, text in walk(r.get("tips", []) + [h.get("text", "") for h in r.get("host_steps", [])]):
         for m in SLOT.finditer(text):
-            if slots.get(m.group(1), {}).get("type") in (None, "secret") or isinstance(slots[m.group(1)].get("asked_if"), dict):
+            if slots.get(m.group(1), {}).get("type") in (None, "secret") or isinstance(slots[m.group(1)].get("asked_if"), dict) \
+                    or slots[m.group(1)].get("many"):
                 err.append(f"tips/host_steps: '{{{{{m.group(1)}}}}}' isn't a gap they may show")
     for h in r.get("host_steps", []):
         for t in h.get("if_on", []):
             if slots.get(t, {}).get("type") != "toggle":
                 err.append(f"host_steps: 'if_on' names {t!r}, not a toggle")
+    if r["schema"] == TOOLS_SCHEMA and isinstance(r.get("tools"), list):
+        used |= {t["ping"] for t in r["tools"] if isinstance(t, dict) and "ping" in t}   # a tile's ping: for the gate
     for name in set(slots) - used:
         warn.append(f"slot {name} is declared but never used")
+    v4 = r["schema"] == TOOLS_SCHEMA
     for sname, svc in services.items():
-        extra = set(svc) - SERVICE_KEYS - set(allowed)
+        extra = set(svc) - SERVICE_KEYS - set(allowed) - (HARDENING if v4 else set())
         if extra:
             err.append(f"{sname}: not allowed: {sorted(map(str, extra))} (privileged, pid, security_opt… are never accepted;"
-                       f" host network, NET_ADMIN, NET_RAW and the tun device only when declared in needs.elevated)")
+                       f" host network, NET_ADMIN, NET_RAW and the tun device only when declared in needs.elevated"
+                       + ("; format 4 also takes read_only, cap_drop, security_opt, tmpfs and profiles, in their one safe form"
+                          if v4 else "") + ")")
+        if v4:
+            hardening(sname, svc, data, err)
         for key in set(allowed) & set(svc):
             vals = {svc[key]} if isinstance(svc[key], str) else set(map(str, svc[key]))
             if vals - allowed[key]:
@@ -668,6 +783,9 @@ def _check(r, repo_id):
             elif m.group(1) in yours and not re.match(r"^\{\{\s*[a-z_][a-z0-9_]*\s*\}\}:/[A-Za-z0-9._/-]+:ro$", str(v)):
                 err.append(f"{sname}: volume {str(v)[:60]!r}: a folder of yours is mounted whole and read only: "
                            f"'{{{{{m.group(1)}}}}}:/inside/path:ro'")
+            elif slots[m.group(1)].get("many") and not MANY_VOLUME.match(str(v)):
+                err.append(f"{sname}: volume {str(v)[:60]!r}: the folders to read are mounted each at its own path under "
+                           f"one folder inside: '{{{{{m.group(1)}}}}}:/data:ro' (a folder /x/y is then /data/x/y)")
         if "user" in svc:
             m = USER_FORM.match(svc["user"])
             if not (m and slots.get(m.group(1), {}).get("type") == "user"):
@@ -703,7 +821,131 @@ def _check(r, repo_id):
         err.append("update.major.dump: stop-and-copy needs a folder gap")
     if major.get("rollback") not in ROLLBACK:
         err.append(f"update.major.rollback: {str(major.get('rollback'))[:20]!r} isn't 'image' or 'none'")
+    if v4:
+        check_tools(r, slots, err, warn, used)
     return err, warn
+
+
+def check_data(r, slots, data, yours, elevated, err):
+    """Format 4: the folders to read, other apps' included (reads-all-data). ONE list gap (many: true; owner, 12 Nov: no
+    limit on how many), always asked, mounted whole and read only, each folder approved one by one on the machine."""
+    if DATA in elevated and not data:
+        err.append(f"needs.elevated: {DATA} declared, but no folder gap says 'suggest: any-data'")
+    if not data:
+        return
+    if r["schema"] != TOOLS_SCHEMA or DATA not in elevated:
+        err.append(f"slots {sorted(data)}: 'suggest: any-data' needs format 4 and needs.elevated.{DATA} with a reason")
+    if len(data) != 1:
+        err.append(f"slots {sorted(data)}: the folders to read are ONE list gap ('suggest: any-data', 'many: true'), "
+                   "however many folders you choose")
+    if yours:
+        err.append(f"slots {sorted(yours)}: an app that reads all data asks every folder as 'any-data', not 'yours'")
+    for n in sorted(data):
+        s = slots[n]
+        if s.get("many") is not True:
+            err.append(f"slot {n}: the folders to read are one list: add 'many: true'")
+        bad = sorted(k for k in ("sub", "default", "advanced", "asked_if") if k in s)
+        if bad:
+            err.append(f"slot {n}: the folders to read are always asked, with no {', '.join(bad)}")
+
+
+def hardening(sname, svc, data, err):
+    """Format 4: the keys that only take access away, each in its one safe form; DAC_READ_SEARCH only where every
+    other power was dropped first, on a service that reads the folders."""
+    if "cap_drop" in svc and svc["cap_drop"] != ["ALL"]:
+        err.append(f"{sname}: cap_drop is [ALL] (all or nothing)")
+    if "security_opt" in svc and svc["security_opt"] != ["no-new-privileges:true"]:
+        err.append(f"{sname}: security_opt is [\"no-new-privileges:true\"] only")
+    if "tmpfs" in svc and not all(isinstance(x, str) and TMPFS.match(x) and ".." not in x for x in svc["tmpfs"]):
+        err.append(f"{sname}: tmpfs lists plain paths inside, like /tmp (no options)")
+    if "profiles" in svc and svc["profiles"] != ["tool"]:
+        err.append(f"{sname}: profiles is [tool] (a service that runs only from a tile)")
+    if "DAC_READ_SEARCH" in map(str, svc.get("cap_add", [])):
+        reads = any(WHOLE.match(str(v).split(":")[0]) and WHOLE.match(str(v).split(":")[0]).group(1) in data
+                    for v in svc.get("volumes", []))
+        if svc.get("cap_drop") != ["ALL"] or not reads or set(map(str, svc["cap_add"])) != {"DAC_READ_SEARCH"}:
+            err.append(f"{sname}: DAC_READ_SEARCH only with cap_drop: [ALL], alone in cap_add, on a service that "
+                       "mounts the folders to read")
+
+
+def tool_services(r):
+    """The services a tile runs, and those they depend on: they carry profiles: [tool]."""
+    services = r["compose"]["services"]
+    todo = [t["run"]["service"] for t in r.get("tools") or [] if "run" in t and t["run"].get("service") in services]
+    seen = set()
+    while todo:
+        s = todo.pop()
+        if s not in seen:
+            seen.add(s); todo += [d for d in services[s].get("depends_on", []) if d in services]
+    return seen
+
+
+def check_tools(r, slots, err, warn, used):
+    """Format 4: what each tile does — one action from the list, named services of this recipe only."""
+    services, tools = r["compose"]["services"], r["tools"]
+    ids = [t["id"] for t in tools]
+    if len(set(ids)) != len(ids):
+        err.append("tools: each tile has its own id")
+    runs = {t["id"] for t in tools if "run" in t}
+    for t in tools:
+        where = f"tool {t['id']}"
+        acts = [k for k in ("run", "last_of") if k in t]
+        if len(acts) != 1:
+            err.append(f"{where}: exactly one action: run (a service of this recipe, once) or last_of (another tile's "
+                       "kept output)"); continue
+        if (t["kind"] == "change") != ("confirm" in t):
+            err.append(f"{where}: a change tile has a 'confirm' word to type; a read tile has none")
+        if "last_of" in t:
+            if t["last_of"] not in runs or t["last_of"] == t["id"]:
+                err.append(f"{where}: last_of names another tile that runs a service")
+            if t["kind"] != "read" or {"dumps_first", "ping"} & set(t):
+                err.append(f"{where}: showing a kept output is a read tile, with no dumps_first or ping")
+            continue
+        sname = t["run"]["service"]
+        svc = services.get(sname)
+        if svc is None:
+            err.append(f"{where}: service {str(sname)[:40]!r} isn't in the recipe"); continue
+        if svc.get("profiles") != ["tool"] or str(svc.get("restart", "")) != "no" or svc.get("ports"):
+            err.append(f"{where}: its service {sname} needs profiles: [tool] and restart: \"no\", and no ports (it runs "
+                       "only from the tile, then stops)")
+        picks = [a for a in t["run"].get("args", []) if isinstance(a, dict)]
+        if len(picks) > 1:
+            err.append(f"{where}: at most one picked argument")
+        for a in t["run"].get("args", []):
+            vals = list(a["pick"]["options"].values()) if isinstance(a, dict) else [a]
+            for v in vals:
+                if not (isinstance(v, str) and ARG.match(v)) or ".." in v.split("/"):
+                    err.append(f"{where}: argument {str(v)[:40]!r}: letters, digits and / % + = : , . _ @ - only (no "
+                               "spaces, quotes, $ or { }), never ..")
+        if t.get("dumps_first") and t["kind"] != "change":
+            err.append(f"{where}: dumps_first is for a change tile (the gate makes your apps' database dumps first)")
+        if "ping" in t:
+            s = slots.get(t["ping"], {})
+            if s.get("type") != "secret" or s.get("source") != "ask":
+                err.append(f"{where}: ping names a secret you paste (your Healthchecks address): the gate calls it when "
+                           "the run ends well, and never shows it")
+            elif s.get("encode"):
+                err.append(f"{where}: ping's gap is a plain address: no 'encode'")
+            elif not GATE_SECRET.match(t["ping"].upper()):
+                err.append(f"{where}: ping's gap goes to .env as {t['ping'].upper()}: start its name with a letter")
+            used.add(t["ping"])
+    tsv = tool_services(r)
+    for sname, svc in services.items():
+        if svc.get("profiles") == ["tool"] and sname not in tsv:
+            err.append(f"{sname}: profiles: [tool], but no tile runs it (nor one it serves)")
+        if sname in tsv and svc.get("profiles") != ["tool"]:
+            err.append(f"{sname}: a tile's service, or one it depends on, carries profiles: [tool]")
+    if r["update"].get("main") in tsv:
+        warn.append(f"update.main {r['update']['main']} runs only from a tile: its update check needs gate 1.12 "
+                    "(recipe-format-4-design.md, open point 3)")
+    if "use_from" in r and "tools-tab" not in r["use_from"]:
+        warn.append("use_from: a recipe with tiles usually lists tools-tab")
+
+
+def tools_fingerprint(tools):
+    """The SHA-256 the gate records when the tools section is accepted by hand (one canonical form, so every reader
+    gets the same): a changed tile, argument or order is a different section, waiting for approval again."""
+    return hashlib.sha256(json.dumps(tools, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
 def check_entries(r, slots, err, used):
@@ -713,7 +955,7 @@ def check_entries(r, slots, err, used):
     seen, went = set(), set()                         # went: (gap, choice, answer) — where a choice's own questions go
     for sname, k, e in entries(r["compose"]):
         where = f"{sname}.environment.{k}"
-        if r["schema"] != 2:
+        if r["schema"] not in F2:
             err.append(f"{where}: a value with gaps inside needs format 2 (schema: 2)"); continue
         if not GATE_SECRET.match(k):
             err.append(f"{where}: its name goes to .env: capitals, digits and _, starting with a capital, at most 41")
@@ -754,6 +996,9 @@ def check_entries(r, slots, err, used):
                 if t not in IN_VALUE or (t == "secret" and g.get("source") != "ask"):
                     err.append(f"{w}: '{{{{{base}}}}}' is a {t}{' made for the app' if t == 'secret' else ''}: only a "
                                "secret you paste, a text, an address or a choice can go inside a value")
+                elif g.get("encode"):
+                    err.append(f"{w}: '{{{{{base}}}}}' is written encoded ({g['encode']}): only as a whole value, never "
+                               "inside one")
                 elif isinstance(a, str):
                     err.append(f"{w}: '{{{{{base}}}}}' is only asked when a switch is on: it can't go inside a value")
                 elif isinstance(a, dict):
@@ -809,7 +1054,8 @@ U_HEALTH = {"none", "app-status", "ok-detail"}   # app-status: Nextcloud's occ s
 U_DUMPS = {"none", "postgres"}
 U_ROLLBACK = {"image", "none"}
 U_KEYS = {"wait", "version", "site", "health", "major"}
-U_OPTIONAL = {"busy", "data_copy"}
+U_OPTIONAL = {"busy", "data_copy", "dump"}
+U_DUMP_WHEN = {"major", "every"}      # 0.9.9: when the major block's dump is made — majors only (default) or every update
 U_BUSY = {"none", "check"}
 U_DATA_COPY = {"none", "every", "major"}
 U_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -834,6 +1080,10 @@ def check_update_block(u):
         bad.append(f"update.busy: one of {sorted(U_BUSY)}")
     if u.get("data_copy", "none") not in U_DATA_COPY:
         bad.append(f"update.data_copy: one of {sorted(U_DATA_COPY)}")
+    if not isinstance(u.get("dump", "major"), str) or u.get("dump", "major") not in U_DUMP_WHEN:
+        bad.append(f"update.dump: one of {sorted(U_DUMP_WHEN)} (when the major block's dump is made)")
+    elif u.get("dump") == "every" and (not isinstance(u.get("major"), dict) or u["major"].get("dump", "none") == "none"):
+        bad.append("update.dump: 'every' needs a dump in the major block ({kind: postgres, service: <name>})")
     if not _seconds(u["wait"], 10, 900):
         bad.append("update.wait: 10–900 seconds")
     if u["version"] not in U_VERSION:
@@ -906,6 +1156,9 @@ def checked(r, repo_id=None):
 
 def valid(slot, value):
     t = slot["type"]
+    if t == "folder" and slot.get("many"):         # gate 1.12: the folders to read, as many as you like
+        return isinstance(value, list) and len(value) > 0 and all(one_of_many(v) for v in value) \
+            and len(set(value)) == len(value) and not any(a != b and b.startswith(a + "/") for a in value for b in value)
     if t == "folder":
         return isinstance(value, str) and value.startswith("/") and len(value) < 300 and ".." not in value.split("/") \
             and not UNSAFE.search(value)
@@ -935,12 +1188,22 @@ def valid(slot, value):
     return False                        # a type this code doesn't know never gets an answer through
 
 
+def one_of_many(v):
+    """One folder of a list gap: a plain full path (no ., .., //, trailing / or '/' itself), without ':' or ',' (they'd
+    split a Compose volume)."""
+    return isinstance(v, str) and v.startswith("/") and len(v) < 300 and not UNSAFE.search(v) and not re.search(r"[:,]", v) \
+        and all(x not in ("", ".", "..") for x in v.split("/")[1:])
+
+
 CHARS = "no spaces, line breaks or the characters { } $ `"
 
 
 def rule(slot):
     """What an answer for this gap must look like, in words: shown when one is refused, instead of the answer."""
     t = slot.get("type")
+    if t == "folder" and slot.get("many"):
+        return ("one or more full paths starting with /, each under 300 characters, without '..', ':' or ',', no line breaks "
+                "or the characters { } $ `, none listed twice and none inside another")
     if t == "folder":
         return "a full path starting with /, under 300 characters, without '..', no line breaks or the characters { } $ `"
     if t == "port":
@@ -973,6 +1236,10 @@ def refusal(name, slot):
 
 
 LEFT_OUT = object()                     # a secret whose switch is off: its environment entry isn't written at all
+
+
+class Many(list):
+    """Gate 1.12: the volumes one list gap becomes, spliced into the volumes list in its place."""
 
 
 def fill(r, answers, rng=secrets):
@@ -1015,7 +1282,7 @@ def _fill(r, answers, rng, for_gate):
         v = answer(name, s, s.get("default"))
         if s["type"] == "choice" and isinstance(s["options"], dict):
             v = s["options"][v]
-        vals[name] = ",".join(v) if s["type"] == "networks" else v
+        vals[name] = ",".join(v) if s["type"] == "networks" else list(v) if s.get("many") else v
     for name, s in slots.items():
         if "under" in s:
             vals[name] = answer(name, s, vals[s["under"]] + "/" + s["sub"])
@@ -1025,12 +1292,22 @@ def _fill(r, answers, rng, for_gate):
             vals[name] = SLOT.sub(lambda m: str(vals[m.group(1)]), str(s["on"] if v else s["off"]))
 
     def sub(text):
+        f = WHOLE.match(text.split(":")[0])        # format 4: the folders to read → one volume each, at <inside>F
+        if f and slots.get(f.group(1), {}).get("many"):
+            inside = text.split(":")[1]
+            return Many(f"{x}:{inside}{x}:ro" for x in vals[f.group(1)])
         m = WHOLE.match(text)
         if m and slots[m.group(1)]["type"] == "secret":
             key, v = m.group(1).upper(), vals[m.group(1)]
             if v is None:
                 return LEFT_OUT
-            env[key] = v if not for_gate or isinstance(v, dict) else {"value": v}
+            if slots[m.group(1)].get("encode"):        # gate 1.12 writes it encoded; filled here only for the gate
+                if not for_gate:
+                    raise Refused(f"{key}: written encoded ({slots[m.group(1)]['encode']}) by the gate only: install it "
+                                  "through the gate")
+                env[key] = {"value": v, "encode": slots[m.group(1)]["encode"]}
+            else:
+                env[key] = v if not for_gate or isinstance(v, dict) else {"value": v}
             return "${" + key + "}"
         return " ".join(SLOT.sub(lambda m: str(vals[m.group(1)][m.group(2)] if m.group(2) else vals[m.group(1)]), text).split()) \
             if SLOT.search(text) else text
@@ -1067,11 +1344,21 @@ def _fill(r, answers, rng, for_gate):
                     out[k] = v
             return out
         if isinstance(node, list):
-            return [rebuild(v) for v in node]
+            out = []
+            for x in (rebuild(v) for v in node):
+                if isinstance(x, Many):
+                    out += x
+                elif x is not LEFT_OUT:
+                    out.append(x)
+            return out
         return sub(node) if isinstance(node, str) else node
 
     compose = rebuild(r["compose"])        # ${NAME} is filled by Compose from the project's own .env, per value
-    tips = [rebuild(t) for t in r.get("tips", [])]
+    for t in r.get("tools") or []:         # format 4: a tile's ping address goes to .env for the gate only, in no service
+        v = vals.get(t.get("ping"))
+        if v is not None:
+            env[t["ping"].upper()] = {"value": v} if for_gate else v
+    tips = [x for x in (rebuild(t) for t in r.get("tips", [])) if x is not LEFT_OUT]
     steps = [rebuild(h["text"]) for h in r.get("host_steps", [])
              if any(answers.get(t, slots[t]["default"]) for t in h.get("if_on", []))]
     return compose, env, tips, steps
@@ -1091,7 +1378,13 @@ def permissions(r):
             name = WHOLE.match(re.sub(r"/[a-z0-9_\-/]+$", "", parts[0])).group(1)
             base = slots[name].get("under", name)
             folders.setdefault(base, set()).add("read only" if parts[-1] == "ro" else "read and change")
+    reads = [b for b in folders if slots[b].get("suggest") == "any-data"]
+    if reads:                                   # format 4: one line for the folders it reads (one list gap)
+        out.append(("folder", "reads the folders you choose (as many as you like), other apps' data included — read "
+                    "only; it can't change them. You approve each one on the machine first", "always"))
     for base, modes in folders.items():         # made for the app (app-folder, or inside one) vs one of yours it may use
+        if base in reads:
+            continue
         if slots[base].get("suggest") == "yours":
             out.append(("folder", f"reads a folder you choose ({slots[base]['question'].rstrip('?')}) — read only; it can't "
                         "change it. You approve it on the machine first", "always"))
@@ -1111,11 +1404,23 @@ def permissions(r):
         nets = [m.group(1) for m in SLOT.finditer(on) if slots.get(m.group(1), {}).get("type") == "networks"]
         if nets:                                         # computed: a home address range goes into the setting
             out.append(("network", "it can let your devices reach other things at home (the range you choose)", t))
+        elif r["schema"] == TOOLS_SCHEMA and not any(t in {m.group(1) for m in SLOT.finditer(x)} for _, x in walk(r["compose"])):
+            continue                                     # format 4: a switch that only asks one more question sets nothing
         elif on:                                         # any other switch: named by its own question, nothing claimed
             out.append(("setting", f"you choose: “{s['question']}”", t))
     out.append(("internet", "it can reach the internet (every app can, unless it's cut off)", "always"))
     for e in ((r.get("needs") or {}).get("elevated") or {}):
         out.append(("extra", ELEVATED_WORDS[e], "always"))
+    tools = r.get("tools") or []                # format 4: what its tiles may do, counted from the section itself
+    if tools:
+        n_read = sum(1 for t in tools if t["kind"] == "read")
+        n_change = len(tools) - n_read
+        out.append(("tools", f"{len(tools)} tile{'s' if len(tools) != 1 else ''} in the updater's Tools tab: "
+                    f"{n_read} only look{'s' if n_read == 1 else ''} and run{'s' if n_read == 1 else ''} at once, {n_change} "
+                    f"change{'s' if n_change == 1 else ''} something and ask{'s' if n_change == 1 else ''} you first. None works "
+                    "until you accept them on the machine", "always"))
+        if any(t.get("dumps_first") for t in tools):
+            out.append(("tools", "before it runs, the machine makes your other apps' database dumps (the updater's own)", "always"))
     said = {}
     for s in slots.values():
         if s["type"] == "secret":

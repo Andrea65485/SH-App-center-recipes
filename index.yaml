@@ -1,12 +1,13 @@
 # Made by publish.py — do not edit by hand: the signature (index.yaml.sig) covers every byte.
 schema: 1
 repository: sh-app-centre
-serial: 20261110032550
-generated: '2026-11-10T03:25:50Z'
-expires: '2026-12-10T03:25:50Z'
+serial: 20261113034101
+generated: '2026-11-13T03:41:01Z'
+expires: '2026-12-13T03:41:01Z'
 recipes:
   ddns-updater: {path: ddns-updater/recipe.yaml, sha256: 32930d005e95d8f791d80fc71404cd9c7bcc2659d298bee69288f7cef8d28305, size: 13230, files: {'icon.png': {sha256: 16de9345ec08384b415d63b30251d8eff572a6bdd312efb01eb9604f915f28df, size: 26999}}}
   gamevault: {path: gamevault/recipe.yaml, sha256: 6fb54410cec685b09a6400fb1ef77af12e0e671a725b3e3df97c9ddbeb85dadf, size: 8250, files: {'icon.svg': {sha256: 02838af297ef5d70d67f1e197be124bf489b06ac7659c6abd25ddd6a214fd7ca, size: 6497}, 'screenshots/1.webp': {sha256: 2db40fbeb1453e66e07bcc542c9a703a8ffbe4f8b8e5c3fec67f0ccc811062ee, size: 35802}, 'screenshots/2.webp': {sha256: 9f34d8e84cc8f89682b901f43ccc1624fefa2ddf170f55ed3eee24ca48776a59, size: 29312}, 'screenshots/3.webp': {sha256: 43113e99418445cabcaf2b1b9f4c3835805a6e06b5843392498de8d85ef7c66d, size: 23716}}}
   home-assistant: {path: home-assistant/recipe.yaml, sha256: a82c4d1986026e495a6c9ca656e6e64b51debe862a5938d664e28914225e7a20, size: 2345, files: {'icon.svg': {sha256: a1c5bcc1b4cba9238169e7fce3d391cfe4fd9813c656accff505cc920a14549b, size: 1335}, 'screenshots/1.webp': {sha256: 26964ca3612df4d0c0afd1bceb6d55743e62eb29c3125374876a9b1d09df29d6, size: 27688}, 'screenshots/2.webp': {sha256: cf23ca412b232b5b8cc9ead401c3dd98e6b5bd9dc40e79fe6a9486777f35883d, size: 37554}, 'screenshots/3.webp': {sha256: 818dd7e79fec2876370a4e9554b651fa92094e5fa46e14dcc3030cb6480c4b74, size: 17440}}}
   piper: {path: piper/recipe.yaml, sha256: da666fcf3e16f0bbbc0be787e96d813be7b638f533cbe53560d21b05db0b7cc9, size: 3800, files: {'icon.svg': {sha256: ea72fa53e17dde313637842352125dabb609774c2f52aa2101fc9b39e2246556, size: 2586}}}
-  stirling-pdf: {path: stirling-pdf/recipe.yaml, sha256: e728690c4e35619860850a76f918e98669aa4c1662f89ab8011d8fd0fe9ffc2a, size: 6457, files: {'icon.svg': {sha256: f4c7bb6f1bd2199918f6b01a48a5297c91915d569d202522ad0f736afa524b56, size: 487}, 'screenshots/1.webp': {sha256: 8f2b18669cc231f3b704c120eccffc94ef6177d0bd534044721671db7cc3a606, size: 41770}, 'screenshots/2.webp': {sha256: b208bfbc2bd8dfc4dc3a8a6053372c725e823597f7bd908b8d0c786b15241501, size: 39824}, 'screenshots/3.webp': {sha256: 13161267c05ef6339d3144337a1709291ea16e8b96da755f9ef35b7ce8c08d3e, size: 43282}}}
+  restic-backup: {path: restic-backup/recipe.yaml, sha256: 0cfff8fec663a28dd4459019cd441611c3d51b5b14c96eb12e98c0ec0542c9ae, size: 7923, files: {'icon.png': {sha256: 38a227ed218aa05d960ea22a77085c45fa1cd69de2565f37fc2d0289b4e04edf, size: 16424}}}
+  stirling-pdf: {path: stirling-pdf/recipe.yaml, sha256: 982a41edca7c201ea598ff4787da0cbe04ffdb8de043b9b07333e0c1de0e4063, size: 6722, files: {'icon.svg': {sha256: f4c7bb6f1bd2199918f6b01a48a5297c91915d569d202522ad0f736afa524b56, size: 487}, 'screenshots/1.webp': {sha256: 8f2b18669cc231f3b704c120eccffc94ef6177d0bd534044721671db7cc3a606, size: 41770}, 'screenshots/2.webp': {sha256: b208bfbc2bd8dfc4dc3a8a6053372c725e823597f7bd908b8d0c786b15241501, size: 39824}, 'screenshots/3.webp': {sha256: 13161267c05ef6339d3144337a1709291ea16e8b96da755f9ef35b7ce8c08d3e, size: 43282}}}
